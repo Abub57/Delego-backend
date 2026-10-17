@@ -5,6 +5,9 @@
  * - Exponential backoff retries (1m, 5m, 30m, 2h, 24h)
  * - Dead letter queue after 5 failed attempts
  * - HMAC-SHA256 signature validation on delivery
+ * - SSRF defense (Issue #348): every delivery is validated and sent via
+ *   ssrfGuard.ts, which rejects private/loopback/link-local targets and
+ *   non-HTTPS URLs and pins the TCP connection to the validated IP.
  */
 
 import { Queue, Worker, QueueEvents } from "bullmq";
@@ -12,6 +15,7 @@ import { createLogger } from "@delegolabs/utils";
 import { signWebhookPayload, WEBHOOK_SIGNATURE_HEADER, type WebhookPayload } from "./hmac.js";
 import { WebhookRegistry } from "./registry.js";
 import type { Webhook } from "./types.js";
+import { validateWebhookUrl, postJsonWithPinnedIp } from "./ssrfGuard.js";
 
 const log = createLogger("notifications:webhooks:bullQueue", process.env.LOG_LEVEL ?? "info");
 
@@ -170,22 +174,35 @@ export class WebhookBullQueue {
       "X-Webhook-Version": String(webhook.version),
     };
 
+    // Issue #348 — SSRF defense: resolve the webhook hostname and reject
+    // private/loopback/link-local IPs (including the 169.254.169.254
+    // cloud-metadata address) and non-HTTPS URLs *right before sending*,
+    // then pin the TCP connection to that resolved IP so a second DNS
+    // lookup at connect time can't be used for a rebinding attack.
+    const validation = await validateWebhookUrl(webhook.url);
+    if (!validation.isValid) {
+      log.error("Webhook URL failed SSRF validation — refusing to deliver", {
+        webhookId: webhook.id,
+        url: webhook.url,
+        reason: validation.reason,
+      });
+      throw new Error(
+        `Webhook URL failed SSRF validation (${validation.reason}): refusing to deliver to ${webhook.url}`,
+      );
+    }
+
     log.info("Delivering webhook", {
       webhookId: webhook.id,
       url: webhook.url,
       eventId: data.payload.id,
       event: data.payload.event,
       attempt: data.attempt,
+      resolvedIp: validation.ipAddress,
     });
 
-    const response = await fetch(webhook.url, {
-      method: "POST",
-      headers,
-      body,
-      timeout: 30_000,
-    });
+    const response = await postJsonWithPinnedIp(new URL(webhook.url), validation, body, headers, 30_000);
 
-    if (!response.ok) {
+    if (response.status < 200 || response.status >= 300) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 

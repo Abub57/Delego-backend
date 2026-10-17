@@ -36,3 +36,22 @@ export interface SignResult {
   remainingBudgetStroops?: string;
   error?: string;
 }
+
+/**
+ * A node-local, bounded-TTL cache entry for session-key revocation status.
+ * Closes #344 — see sessionKeyCache.ts for why the 5-second cap on
+ * `cachedAt` staleness exists.
+ *
+ * Note: session keys in this codebase are currently tracked by a Unix
+ * epoch expiry (`SessionKeyRecord.expiresAt`), not a Soroban ledger
+ * sequence number. `expiresAtLedger` carries that same epoch-seconds value
+ * until ledger-sequence-based expiry tracking is wired in.
+ */
+export interface SessionKeyCacheEntry {
+  keyId: string;
+  publicKey: string;
+  ownerAddress: string;
+  expiresAtLedger: number;
+  isRevoked: boolean;
+  cachedAt: number;
+}

@@ -1,19 +1,43 @@
 /**
  * Structured logging module using Pino
- * 
+ *
  * Provides:
  * - JSON-structured logging with NDJSON output
  * - Request ID correlation via middleware
  * - Child loggers with contextual metadata
  * - Configurable log levels via LOG_LEVEL environment variable
- * 
+ *
  * @module logger
+ *
+ * Issue #345 — memory leak fix:
+ * Request logging previously relied on pino-http's default behavior of
+ * calling `logger.child({ reqId, ... })` on every single request to build
+ * `req.log`. Under sustained high-throughput traffic, each of those child
+ * logger instances is a distinct object holding its own bound-context
+ * closures, and anything downstream that captured a reference to `req.log`
+ * (retry queues, async handlers, deferred callbacks) kept that whole child
+ * alive well past the request's lifetime — a slow, steady heap leak.
+ *
+ * Fix: request context (reqId, method, path) now lives in an
+ * AsyncLocalStorage store for the duration of the request instead of being
+ * baked into a dedicated child logger object. The root logger's `mixin`
+ * hook reads that store on every log call, so `req.log` can simply be the
+ * *shared* root logger — no new bound instance is allocated per request,
+ * and there is nothing per-request left for a stray reference to pin in
+ * memory once the request completes.
  */
 
 import pino from "pino";
-import pinoHttp from "pino-http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+/**
+ * Per-request context (reqId, method, path) made available to every log
+ * call made while handling that request, without allocating a child logger.
+ * See the Issue #345 note above.
+ */
+const requestContextStorage = new AsyncLocalStorage<Record<string, unknown>>();
 
 /**
  * Log levels supported by Pino
@@ -38,6 +62,14 @@ function createRootLogger(): pino.Logger {
       service: "gateway",
       env: process.env.NODE_ENV || "development",
       pid: process.pid,
+    },
+    // Issue #345: merge the current request's context (if any) into every
+    // log line without allocating a child logger per request. `mixin` runs
+    // on each log call and its return value is shallow-merged into that
+    // call's fields, so request correlation stays accurate while the
+    // underlying logger instance is reused across every request.
+    mixin() {
+      return requestContextStorage.getStore() ?? {};
     },
     // Pretty print in development for better readability
     transport: isDevelopment
@@ -92,103 +124,77 @@ function extractOrGenerateRequestId(req: IncomingMessage): string {
 }
 
 /**
- * Request logging middleware factory using pino-http
- * 
+ * Request logging middleware factory.
+ *
  * Features:
  * - Extracts or generates request ID
  * - Attaches request ID to response headers for client tracing
- * - Creates child logger with request context (reqId, method, path)
+ * - Makes request context (reqId, method, path) available to every log
+ *   call made during the request via AsyncLocalStorage — without
+ *   allocating a per-request child logger (see the Issue #345 note at the
+ *   top of this file)
  * - Logs incoming requests and completed responses
  * - Includes response time and status code
- * 
+ *
  * @returns Express-compatible middleware function
  */
 export function createRequestLoggingMiddleware() {
-  return pinoHttp({
-    logger,
-    // Generate request ID and attach to logger context
-    genReqId: extractOrGenerateRequestId,
-    // Customize request ID property name in logs
-    requestIdProperty: "reqId",
-    // Custom logger instance per request with contextual data
-    customLogLevel: (req, res, err) => {
-      if (res.statusCode >= 500 || err) {
-        return "error";
+  return (req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void): void => {
+    const reqId = extractOrGenerateRequestId(req);
+    const path = req.url || "";
+    const isHealthCheck =
+      path === "/health" ||
+      path === "/healthz" ||
+      path === "/ready" ||
+      path.startsWith("/health/");
+
+    // `req.log` is the shared root logger, not a bound child instance — its
+    // calls pick up { reqId, method, path } via the `mixin` hook reading
+    // the AsyncLocalStorage store set up below. Nothing per-request is
+    // allocated or retained here, so a stray reference to `req.log` can no
+    // longer pin request-specific state in memory.
+    (req as any).id = reqId;
+    (req as any).log = logger;
+    res.setHeader("x-request-id", reqId);
+
+    const requestContext = { reqId, method: req.method, path };
+
+    requestContextStorage.run(requestContext, () => {
+      const startedAt = Date.now();
+
+      if (!isHealthCheck) {
+        logger.info(`Incoming ${req.method} ${req.url}`);
       }
-      if (res.statusCode >= 400) {
-        return "warn";
-      }
-      return "info";
-    },
-    // Custom request logging
-    customReceivedMessage: (req) => {
-      return `Incoming ${req.method} ${req.url}`;
-    },
-    // Custom response logging with duration
-    customSuccessMessage: (req, res) => {
-      return `Completed ${req.method} ${req.url} - ${res.statusCode}`;
-    },
-    // Custom error logging
-    customErrorMessage: (req, res, err) => {
-      return `Request ${req.method} ${req.url} failed - ${res.statusCode}: ${err.message}`;
-    },
-    // Customize request serialization
-    serializers: {
-      req: (req: IncomingMessage) => ({
-        method: req.method,
-        url: req.url,
-        headers: {
-          host: req.headers.host,
-          "user-agent": req.headers["user-agent"],
-          "content-type": req.headers["content-type"],
-        },
-        remoteAddress: req.socket?.remoteAddress,
-      }),
-      res: (res: ServerResponse) => ({
-        statusCode: res.statusCode,
-      }),
-    },
-    // Auto-log requests and responses
-    autoLogging: {
-      ignore: (req) => {
-        // Don't auto-log health check endpoints
-        const path = req.url || "";
-        return (
-          path === "/health" ||
-          path === "/healthz" ||
-          path === "/ready" ||
-          path.startsWith("/health/")
-        );
-      },
-    },
-    // Customize additional request context
-    customAttributeKeys: {
-      req: "request",
-      res: "response",
-      err: "error",
-      responseTime: "duration",
-    },
-  });
+
+      const originalEnd = res.end.bind(res);
+      (res as any).end = function (this: ServerResponse, ...args: unknown[]) {
+        if (!isHealthCheck) {
+          const duration = Date.now() - startedAt;
+          const message = `Completed ${req.method} ${req.url} - ${res.statusCode}`;
+          if (res.statusCode >= 500) {
+            logger.error(message, { duration });
+          } else if (res.statusCode >= 400) {
+            logger.warn(message, { duration });
+          } else {
+            logger.info(message, { duration });
+          }
+        }
+        return originalEnd.apply(this, args as unknown[]);
+      };
+
+      next();
+    });
+  };
 }
 
 /**
- * Middleware wrapper that adds pino-http logging
- * and ensures x-request-id is set on response
+ * Middleware wrapper around {@link createRequestLoggingMiddleware}.
+ * Kept as a separate export for backward compatibility with existing
+ * call sites; the x-request-id header and req.log/req.id attachment now
+ * happen inside the factory itself.
  */
 export function requestLoggingMiddleware() {
-  const pinoMiddleware = createRequestLoggingMiddleware();
-  
-  return (req: IncomingMessage, res: ServerResponse, next: (err?: any) => void): void => {
-    // Apply pino-http middleware
-    pinoMiddleware(req, res);
-    
-    // Extract request ID and set response header for client tracing
-    const reqId = (req as any).id || extractOrGenerateRequestId(req);
-    res.setHeader("x-request-id", reqId);
-    
-    // Continue to next middleware
-    next();
-  };
+  return createRequestLoggingMiddleware();
 }
 
 /**
