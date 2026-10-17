@@ -6,12 +6,33 @@ export interface InventoryReservationItem {
   merchantId: string;
   productId: string;
   quantity: number;
+  /**
+   * The order this reservation belongs to (Issue #342). When present, each
+   * reserve/release is recorded as a row in `merchant_inventory_reservations`
+   * under a unique (merchant_id, order_id, product_id) constraint, so a
+   * duplicate checkout retry for the same order fails fast with a unique
+   * constraint violation instead of silently double-reserving stock.
+   */
+  orderId?: string;
 }
 
 export class InsufficientStockError extends Error {
   constructor(public readonly productId: string) {
     super(`Insufficient stock for product ${productId}`);
     this.name = "InsufficientStockError";
+  }
+}
+
+/** Postgres error code for a unique constraint violation. */
+const UNIQUE_VIOLATION = "23505";
+
+export class DuplicateReservationError extends Error {
+  constructor(
+    public readonly orderId: string,
+    public readonly productId: string,
+  ) {
+    super(`Order ${orderId} already has a reservation for product ${productId}`);
+    this.name = "DuplicateReservationError";
   }
 }
 
@@ -76,16 +97,51 @@ export class InventoryReservationService {
           `UPDATE merchant_inventory SET ${stockChange}, updated_at = NOW() WHERE id = $1 AND ${stockGuard}`,
           [inventory.id, item.quantity],
         );
+
+        // Issue #342: record (or clear) the per-order reservation row. The
+        // unique index on (merchant_id, order_id, product_id) is what makes
+        // a duplicate reservation attempt for the same order fail fast
+        // instead of double-reserving stock.
+        if (item.orderId) {
+          if (operation === "reserve") {
+            await client.query(
+              `INSERT INTO merchant_inventory_reservations
+                 (merchant_id, order_id, product_id, quantity, status, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, 'reserved', NOW(), NOW())`,
+              [item.merchantId, item.orderId, item.productId, item.quantity],
+            );
+          } else {
+            await client.query(
+              `UPDATE merchant_inventory_reservations
+               SET status = 'released', updated_at = NOW()
+               WHERE merchant_id = $1 AND order_id = $2 AND product_id = $3 AND status = 'reserved'`,
+              [item.merchantId, item.orderId, item.productId],
+            );
+          }
+        }
       }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
+      if (isUniqueViolation(error)) {
+        const item = orderedItems.find((candidate) => candidate.orderId);
+        throw new DuplicateReservationError(item?.orderId ?? "unknown", item?.productId ?? "unknown");
+      }
       throw error;
     } finally {
       client?.release();
       await lock.release();
     }
   }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === UNIQUE_VIOLATION
+  );
 }
 
 let reservationService: InventoryReservationService | undefined;

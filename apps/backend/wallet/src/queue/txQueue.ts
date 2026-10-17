@@ -36,6 +36,47 @@ export { classifySubmissionFailure, type SubmissionFailure } from "./submissionF
 
 const log = createLogger("wallet:queue", process.env.LOG_LEVEL ?? "info");
 
+/**
+ * BullMQ worker lock/retry configuration — Issue #340.
+ *
+ * `lockDuration` / `lockRenewTime` are passed straight to the BullMQ
+ * `Worker`; `attempts` / `backoff` describe the job-level retry policy
+ * already in effect below. Surfaced as a type so the deadlock-prevention
+ * settings have one documented, testable shape instead of being scattered
+ * magic numbers.
+ */
+export interface QueueRetryConfig {
+  attempts: number;
+  backoff: { type: "exponential"; delay: number };
+  lockDuration: number;
+  lockRenewTime: number;
+}
+
+export const DEFAULT_QUEUE_RETRY_CONFIG: QueueRetryConfig = {
+  attempts: 5,
+  backoff: { type: "exponential", delay: 2000 },
+  // A job lock is held for 30s; renewed every 10s. If a worker can't renew
+  // (e.g. its connection is mid-reconnect during a Sentinel failover), the
+  // lock expires in bounded time instead of being held forever, so BullMQ's
+  // stalled-job detection can reclaim it rather than deadlock.
+  lockDuration: 30_000,
+  lockRenewTime: 10_000,
+};
+
+/**
+ * Parse `REDIS_SENTINELS` ("host:port,host:port,...") into the ioredis
+ * `sentinels` option shape. Returns `null` when unset so callers fall back
+ * to a plain single-node connection.
+ */
+function sentinelNodesFromEnv(): Array<{ host: string; port: number }> | null {
+  const raw = process.env.REDIS_SENTINELS?.trim();
+  if (!raw) return null;
+  return raw.split(",").map((entry) => {
+    const [host, portStr] = entry.trim().split(":");
+    return { host, port: Number(portStr ?? 26379) };
+  });
+}
+
 export interface XdrValidationResult {
   valid: boolean;
   sizeBytes: number;
@@ -187,15 +228,44 @@ export function getRedisConnection(): Redis {
     const MockRedisConstructor = MockRedis as any;
     redisClient = new MockRedisConstructor();
   } else {
-    log.info("Connecting to real Redis", { redisUrl, redisHost, redisPort });
-    if (redisUrl) {
-      redisClient = new Redis(redisUrl, { maxRetriesPerRequest: null });
-    } else {
+    const sentinels = sentinelNodesFromEnv();
+
+    if (sentinels) {
+      // Issue #340: a Sentinel-aware connection re-discovers the promoted
+      // master automatically when Sentinel fails over, instead of staying
+      // pinned to the old (now demoted) master's host:port. That stale
+      // pinning is what previously left BullMQ workers hanging indefinitely
+      // while trying to renew job locks against a dead connection.
+      const masterName = process.env.REDIS_SENTINEL_MASTER ?? "mymaster";
+      log.info("Connecting to real Redis via Sentinel", { sentinels, masterName });
+
       redisClient = new Redis({
-        host: redisHost,
-        port: redisPort,
-        maxRetriesPerRequest: null
+        sentinels,
+        name: masterName,
+        role: "master",
+        password: process.env.REDIS_PASSWORD || undefined,
+        maxRetriesPerRequest: null,
+        // Bounds how long any single command (including a lock-renewal
+        // command issued mid-failover) can hang before failing fast.
+        commandTimeout: Number(process.env.REDIS_COMMAND_TIMEOUT_MS ?? 5000),
+        sentinelRetryStrategy: (times: number) => Math.min(times * 100, 2000),
+        retryStrategy: (times: number) => Math.min(times * 100, 2000),
       });
+
+      redisClient.on("+switch-master", (...args: unknown[]) => {
+        log.warn("Redis Sentinel promoted a new master — reconnected automatically", { args });
+      });
+    } else {
+      log.info("Connecting to real Redis", { redisUrl, redisHost, redisPort });
+      if (redisUrl) {
+        redisClient = new Redis(redisUrl, { maxRetriesPerRequest: null });
+      } else {
+        redisClient = new Redis({
+          host: redisHost,
+          port: redisPort,
+          maxRetriesPerRequest: null
+        });
+      }
     }
 
     redisClient.on("error", (err: any) => {
@@ -740,11 +810,8 @@ export function initQueue() {
   txQueue = new Queue(QUEUE_NAME, {
     connection: connection as any,
     defaultJobOptions: {
-      attempts: 5,
-      backoff: {
-        type: "exponential",
-        delay: 2000, // Start with 2s backoff
-      },
+      attempts: DEFAULT_QUEUE_RETRY_CONFIG.attempts,
+      backoff: DEFAULT_QUEUE_RETRY_CONFIG.backoff,
       removeOnComplete: true,
       removeOnFail: false,
     }
@@ -761,6 +828,17 @@ export function initQueue() {
     {
       connection: connection as any,
       concurrency: 1, // Strict sequential processing
+      // Issue #340: explicit lock duration/renew time bound how long a job
+      // lock can be held without a successful renewal. Combined with
+      // stalled-job detection below, a worker whose connection hangs during
+      // a Redis Sentinel failover loses its lock and has the job reclaimed
+      // instead of deadlocking indefinitely.
+      lockDuration: DEFAULT_QUEUE_RETRY_CONFIG.lockDuration,
+      lockRenewTime: DEFAULT_QUEUE_RETRY_CONFIG.lockRenewTime,
+      settings: {
+        maxStalledCount: 2,
+        stalledInterval: DEFAULT_QUEUE_RETRY_CONFIG.lockDuration,
+      },
     }
   );
 

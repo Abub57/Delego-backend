@@ -134,29 +134,73 @@ export class DistributedLockManager {
     }
   }
 
+  /**
+   * Renew a held lock's TTL.
+   *
+   * Issue #340: during a Redis Sentinel failover, a renewal command can be
+   * left hanging on a connection that is mid-reconnect to the newly
+   * promoted master. `withRenewTimeout` bounds every renewal attempt so a
+   * stuck connection fails fast — exactly like an explicit "stolen" result —
+   * instead of leaving the lock (and the renewal interval) stuck
+   * indefinitely, which is what caused worker threads to hang rather than
+   * release the lock and let the job be reclaimed.
+   */
   async renew(key: string): Promise<boolean> {
     const record = this.held.get(key);
     if (!record) return false;
-    const result = await redisLockRenew(
-      this.client,
-      key,
-      this.owner,
-      record.ttlMs,
-      record.metadata,
-      record.fence,
-    );
     const level = lockLevelFromKey(key);
+
+    let result: Awaited<ReturnType<typeof redisLockRenew>> | "timeout" | "connection_error";
+    try {
+      result = await this.withRenewTimeout(
+        redisLockRenew(this.client, key, this.owner, record.ttlMs, record.metadata, record.fence),
+        record.ttlMs,
+      );
+    } catch (error) {
+      this.log.warn("Lock renew errored — treating as stolen (fail-fast)", {
+        key,
+        owner: this.owner,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      result = "connection_error";
+    }
+
     if (result === "ok") {
       this.metrics.recordRenew("ok", level);
       record.expiresAt = new Date(this.now() + record.ttlMs).toISOString();
       return true;
     }
+
     record.stolen = true;
     this.stolenKeys.add(key);
     this.stopRenew(key);
     this.metrics.recordRenew(result === "stolen" ? "stolen" : "error", level);
     this.log.warn("Lock renew failed — treating as stolen", { key, result, owner: this.owner });
     return false;
+  }
+
+  /**
+   * Race a renewal call against a bounded timeout so a Redis command stuck
+   * on a stale connection (e.g. mid Sentinel failover) cannot hang the
+   * renewal interval forever. The timeout is capped well below the lock's
+   * own TTL so a timed-out renewal still has time to be treated as "stolen"
+   * and release ownership before the lock would have expired anyway.
+   */
+  private withRenewTimeout<T>(promise: Promise<T>, ttlMs: number): Promise<T | "timeout"> {
+    const timeoutMs = Math.max(1000, Math.min(5000, Math.floor(ttlMs / 2)));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve("timeout"), timeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 
   async inspect(key: string): Promise<{ lock: DistributedLock | null; pttlMs: number }> {

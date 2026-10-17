@@ -43,6 +43,81 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 export function createDLQRoutes(dlqService: DLQService) {
   return [
     /**
+     * GET /api/v1/admin/dlq/jobs
+     * List DLQ records, including full stack traces and cause chains, so
+     * engineers can inspect complete diagnostic context from the DLQ viewer
+     * (Issue #347). Supports optional ?status= and ?queueName= filters.
+     */
+    route('GET', '/api/v1/admin/dlq/jobs', async (req: IncomingMessage, res: ServerResponse) => {
+      const url = new URL(req.url ?? '', 'http://internal');
+      const status = url.searchParams.get('status') ?? undefined;
+      const queueName = url.searchParams.get('queueName') ?? undefined;
+      const limitParam = url.searchParams.get('limit');
+      const limit = limitParam ? Number(limitParam) : undefined;
+
+      const rows = await dlqService.listJobs({ status, queueName, limit });
+
+      json(res, 200, {
+        data: rows.map((row) => ({
+          jobId: row.job_id,
+          queueName: row.queue_name,
+          failedReason: row.failed_reason,
+          stackTrace: row.stack_trace ?? '',
+          errorCauseChain: row.error_cause_chain ?? [],
+          attemptsMade: row.attempts_made,
+          payload: row.payload,
+          failedAt: row.failed_at,
+          replayedAt: row.replayed_at,
+          replayCount: row.replay_count,
+          status: row.status,
+        })),
+        error: null,
+      });
+    }),
+
+    /**
+     * GET /api/v1/admin/dlq/jobs/:queueName/:jobId
+     * Fetch a single DLQ record's full diagnostic detail, including its
+     * complete stack trace (Issue #347).
+     */
+    route('GET', '/api/v1/admin/dlq/jobs/:queueName/:jobId', async (_req: IncomingMessage, res: ServerResponse, params?: Record<string, string>) => {
+      const { queueName, jobId } = params ?? {};
+      if (!queueName || !jobId) {
+        json(res, 400, {
+          data: null,
+          error: { code: 'VALIDATION_ERROR', message: 'queueName and jobId are required' },
+        });
+        return;
+      }
+
+      const row = await dlqService.getJobDetail(jobId, queueName);
+      if (!row) {
+        json(res, 404, {
+          data: null,
+          error: { code: 'NOT_FOUND', message: `DLQ record not found for ${queueName}/${jobId}` },
+        });
+        return;
+      }
+
+      json(res, 200, {
+        data: {
+          jobId: row.job_id,
+          queueName: row.queue_name,
+          failedReason: row.failed_reason,
+          stackTrace: row.stack_trace ?? '',
+          errorCauseChain: row.error_cause_chain ?? [],
+          attemptsMade: row.attempts_made,
+          payload: row.payload,
+          failedAt: row.failed_at,
+          replayedAt: row.replayed_at,
+          replayCount: row.replay_count,
+          status: row.status,
+        },
+        error: null,
+      });
+    }),
+
+    /**
      * POST /api/v1/admin/dlq/replay
      * Manually replay failed jobs
      */
