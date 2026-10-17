@@ -38,6 +38,25 @@ export {
   TERMINAL_TRACKING_STATUSES,
 } from "./tracking.js";
 
+export {
+  canTransition,
+  extractCarrierCheckpoint,
+  mapCarrierStatus,
+  normalizeCarrierTrackingEvent,
+  normalizeTrackingEvent,
+  processTrackingEvent,
+} from "./normalizer.js";
+export type {
+  CanonicalDeliveryState,
+  CarrierCheckpoint,
+  NormalizedTrackingEvent,
+  NormalizedTrackingPayload,
+  RawCarrierCheckpoint,
+  RawCarrierTrackingInput,
+  RawTrackingInput,
+  TrackingDeps,
+} from "./normalizer.js";
+
 export { DEFAULT_SHIPPING_DETECTION_CONFIG } from "./types.js";
 export type {
   InTransitShipment,

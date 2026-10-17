@@ -41,6 +41,7 @@ import {
   PostgresCheckpointStore,
   PostgresProcessedEventStore,
 } from "./checkpointStore.js";
+import { waitForPoolCapacity } from "../db.js";
 
 // ---------------------------------------------------------------------------
 // Types (matching issue spec)
@@ -251,6 +252,13 @@ export interface SorobanIngestionWorkerOptions {
   checkpointStore?: CheckpointStore;
   /** PostgreSQL-backed processed-event dedup store. Defaults to InMemoryProcessedEventStore. */
   processedEventStore?: ProcessedEventStore;
+  /**
+   * The CDC Postgres pool backing the stores above. When set, the worker
+   * throttles itself against {@link waitForPoolCapacity} before each bulk
+   * page (Issue #335) instead of hammering a saturated pool during a ledger
+   * sync spike.
+   */
+  pgPool?: Pool;
   logger?: Logger;
 }
 
@@ -265,6 +273,7 @@ export class SorobanEventIngestionWorker {
   private running: boolean = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
+  private pgPool?: Pool;
 
   constructor(
     redis: Redis,
@@ -279,9 +288,23 @@ export class SorobanEventIngestionWorker {
       options?.checkpointStore ?? new InMemoryCheckpointStore();
     this.processedEventStore =
       options?.processedEventStore ?? new InMemoryProcessedEventStore();
+    this.pgPool = options?.pgPool;
     this.log =
       options?.logger ??
       createLogger("cdc:sorobanEvents", process.env.LOG_LEVEL ?? "info");
+  }
+
+  /**
+   * Backpressure gate (Issue #335). Called before every bulk page — both the
+   * startup backfill and each real-time poll — so a ledger-sync spike waits
+   * out pool saturation (exponential backoff) instead of piling up query
+   * attempts that starve the rest of the service's connection budget. A
+   * no-op when the worker was built without a `pgPool` (tests / local dev
+   * with in-memory stores).
+   */
+  private async throttleForPoolCapacity(): Promise<void> {
+    if (!this.pgPool) return;
+    await waitForPoolCapacity(this.pgPool, { log: this.log });
   }
 
   // -------------------------------------------------------------------------
@@ -395,6 +418,10 @@ export class SorobanEventIngestionWorker {
 
     // Page through events from the last checkpoint to the current ledger.
     while (true) {
+      // Throttle against pool saturation before firing off another bulk page
+      // of dedup/checkpoint queries (Issue #335).
+      await this.throttleForPoolCapacity();
+
       const response = await this.rpcClient.getEvents({
         startLedger: pageCursor ? undefined : startLedger,
         cursor: pageCursor,
@@ -502,6 +529,11 @@ export class SorobanEventIngestionWorker {
    * restart can backfill any gap.
    */
   async ingestContract(contractId: string): Promise<number> {
+    // Throttle against pool saturation before this cycle's dedup/checkpoint
+    // queries (Issue #335) — keeps a burst of real-time poll cycles from
+    // stacking on top of an already-saturated pool during a ledger spike.
+    await this.throttleForPoolCapacity();
+
     // Redis cursor — fast per-session resume.
     const cursor = await this.cursorStore.loadCursor(contractId);
 
@@ -561,25 +593,32 @@ export class SorobanEventIngestionWorker {
    * @returns The number of newly published (non-duplicate) events.
    */
   async publishEvents(rawEvents: RawSorobanEvent[]): Promise<number> {
-    let published = 0;
+    if (rawEvents.length === 0) return 0;
 
-    for (const rawEvent of rawEvents) {
-      const normalized = normalizeEvent(rawEvent);
+    const normalizedEvents = rawEvents.map(normalizeEvent);
 
-      // --- DEDUPLICATION: skip if already in the event bus ---
-      const alreadyProcessed = await this.processedEventStore.has(
-        normalized.eventId
-      );
-      if (alreadyProcessed) {
+    // --- DEDUPLICATION: one batched lookup for the whole page (Issue #335)
+    // instead of one SELECT per event — the fix for a bulk backfill/poll
+    // page opening dozens of sequential queries against a pool capped at a
+    // handful of connections during a ledger-sync spike.
+    const alreadyProcessed = await this.processedEventStore.hasMany(
+      normalizedEvents.map((e) => e.eventId)
+    );
+
+    const toPublish = normalizedEvents.filter((normalized) => {
+      if (alreadyProcessed.has(normalized.eventId)) {
         this.log.debug("Skipping duplicate Soroban event", {
           eventId: normalized.eventId,
           contractId: normalized.contractId,
           ledger: normalized.ledger,
         });
-        continue;
+        return false;
       }
+      return true;
+    });
 
-      // --- PUBLISH to Redis Stream ---
+    // --- PUBLISH to Redis Stream (Redis, not Postgres — no pool pressure) ---
+    for (const normalized of toPublish) {
       await this.redis.xadd(
         STREAM_KEY,
         "*",
@@ -591,18 +630,19 @@ export class SorobanEventIngestionWorker {
         "txHash",     normalized.txHash,
         "timestamp",  normalized.timestamp
       );
-
-      // --- RECORD as published (dedup guard for future deliveries) ---
-      await this.processedEventStore.markPublished(
-        normalized.eventId,
-        normalized.contractId,
-        normalized.ledger
-      );
-
-      published++;
     }
 
-    return published;
+    // --- RECORD as published: one batched INSERT for the whole page
+    // (Issue #335), instead of one INSERT per event.
+    await this.processedEventStore.markPublishedMany(
+      toPublish.map((normalized) => ({
+        eventId: normalized.eventId,
+        contractId: normalized.contractId,
+        ledgerSequence: normalized.ledger,
+      }))
+    );
+
+    return toPublish.length;
   }
 
   // -------------------------------------------------------------------------
@@ -683,6 +723,7 @@ export function createSorobanEventIngestionWorker(
   return new SorobanEventIngestionWorker(redis, config, {
     checkpointStore,
     processedEventStore,
+    pgPool: options?.pgPool,
     logger: options?.logger,
   });
 }

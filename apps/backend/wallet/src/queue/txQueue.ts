@@ -484,6 +484,60 @@ async function getNextSequenceNumber(
   return { sequence: buildSequence, resetCache };
 }
 
+/**
+ * True when `err` looks like a Soroban RPC gateway timeout (HTTP 504) or
+ * service-unavailable (503) — the class of error Issue #336 reports being
+ * treated as a permanent submission failure even though the transaction may
+ * already have reached the network.
+ */
+function isRpcGatewayTimeout(err: unknown): boolean {
+  const status = (err as { response?: { status?: number }; status?: number } | undefined)?.response
+    ?.status ?? (err as { status?: number } | undefined)?.status;
+  if (status === 504 || status === 503) return true;
+
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return /\b(504|503)\b/.test(message) || /gateway timeout|service unavailable/i.test(message);
+}
+
+/**
+ * After a gateway timeout on submission, polls transaction status by hash
+ * before giving up — the envelope may have reached consensus even though
+ * the RPC call that submitted it never returned. Returns the confirmed
+ * result when found, or `null` when the transaction genuinely isn't on
+ * chain (safe to let the caller surface a retryable failure).
+ */
+async function reconcileTimedOutSubmission(
+  rpcServer: rpc.Server,
+  txHash: string
+): Promise<TransactionResult | null> {
+  const maxAttempts = process.env.NODE_ENV === "test" ? 2 : 6; // ~30s of polling in production
+  const delayMs = process.env.NODE_ENV === "test" ? 10 : 5000;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const status = await rpcServer.getTransaction(txHash);
+      if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+        const successTx = status as rpc.Api.GetSuccessfulTransactionResponse;
+        log.info("Timed-out submission confirmed on-chain; treating as success (no resubmission)", { txHash });
+        return { hash: txHash, ledger: successTx.ledger, success: true };
+      }
+      if (status.status === rpc.Api.GetTransactionStatus.FAILED) {
+        log.warn("Timed-out submission resolved to FAILED on-chain", { txHash });
+        return null;
+      }
+      // NOT_FOUND — keep polling; the ledger may not have closed yet.
+    } catch (err: unknown) {
+      log.warn("Status reconciliation lookup failed after gateway timeout; will retry", {
+        txHash,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  return null;
+}
+
 async function executeTxJob(
   request: TransactionRequest, 
   attempt: number, 
@@ -563,9 +617,54 @@ async function executeTxJob(
     tx = rpc.assembleTransaction(tx, simRes).build();
     tx.sign(signerKeypair);
 
+    // Compute the hash before submission so it's available for status
+    // reconciliation even when the RPC call itself throws (Issue #336) —
+    // previously `txHash` only got set from `sendRes.hash` on a clean
+    // response, so a gateway timeout left us with no hash to check status
+    // against.
+    txHash = tx.hash().toString("hex");
+
     // 7. Submit transaction to RPC server
-    log.info("Submitting transaction to Stellar network...", { hash: tx.hash().toString("hex") });
-    let sendRes = await withSpan("stellar.sendTransaction", () => rpcServer.sendTransaction(tx), { "peer.service": "stellar-rpc" });
+    log.info("Submitting transaction to Stellar network...", { hash: txHash });
+
+    let sendRes: Awaited<ReturnType<typeof rpcServer.sendTransaction>>;
+    try {
+      sendRes = await withSpan("stellar.sendTransaction", () => rpcServer.sendTransaction(tx), { "peer.service": "stellar-rpc" });
+    } catch (sendErr: unknown) {
+      if (isRpcGatewayTimeout(sendErr)) {
+        // The RPC node (or an intermediary gateway) timed out before
+        // confirming receipt. The envelope may still have reached the
+        // network — assuming failure here would resubmit under a stale
+        // sequence, colliding with the original transaction once it lands.
+        // Reconcile via status lookup instead of treating this as a
+        // permanent failure.
+        log.warn("Soroban RPC gateway timeout on submit; reconciling via status lookup instead of failing immediately", {
+          txHash,
+          error: sendErr instanceof Error ? sendErr.message : String(sendErr),
+        });
+        const reconciled = await reconcileTimedOutSubmission(rpcServer, txHash);
+        if (reconciled) {
+          // Audit: record successful signing (gateway-timeout reconciliation path)
+          if (request.walletId) {
+            try {
+              await insertAuditLog({ walletId: request.walletId, status: "SUCCESS", txHash });
+            } catch (auditErr: any) {
+              log.error("Failed to insert signing audit log (success, timeout reconciliation)", { error: auditErr.message });
+            }
+          } else {
+            log.warn("walletId not available; skipping signing audit log (success, timeout reconciliation)");
+          }
+          return reconciled;
+        }
+
+        throw new Error(
+          `Submission failed: RPC gateway timeout (504/503) and transaction not found on-chain: ${
+            sendErr instanceof Error ? sendErr.message : String(sendErr)
+          }`
+        );
+      }
+      throw sendErr;
+    }
 
     if (sendRes.status === "ERROR") {
       const errorMsg = JSON.stringify(sendRes);
@@ -579,13 +678,29 @@ async function executeTxJob(
     // 8. Poll for transaction result
     txHash = sendRes.hash;
     log.info("Waiting for transaction confirmation...", { txHash });
-    
+
     let retries = 12; // Poll for ~1 minute (5s intervals)
-    
+
     while (retries > 0) {
       await new Promise((resolve) => setTimeout(resolve, process.env.NODE_ENV === "test" ? 10 : 5000));
-      const txStatus = await rpcServer.getTransaction(txHash);
-      
+
+      let txStatus: Awaited<ReturnType<typeof rpcServer.getTransaction>>;
+      try {
+        txStatus = await rpcServer.getTransaction(txHash);
+      } catch (statusErr: unknown) {
+        if (isRpcGatewayTimeout(statusErr)) {
+          // A transient gateway blip while polling shouldn't abort the whole
+          // job — just consume a retry slot and poll again.
+          log.warn("Soroban RPC gateway timeout while polling transaction status; retrying poll", {
+            txHash,
+            retriesLeft: retries - 1,
+          });
+          retries--;
+          continue;
+        }
+        throw statusErr;
+      }
+
       if (txStatus.status === rpc.Api.GetTransactionStatus.SUCCESS) {
         const successTx = txStatus as rpc.Api.GetSuccessfulTransactionResponse;
         log.info("Transaction completed successfully", { txHash });
