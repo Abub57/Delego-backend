@@ -20,6 +20,7 @@ import {
   validateEasyPostPayload,
 } from "./webhooks/carrierWebhook.js";
 import { enqueueCarrierEvent } from "./webhooks/carrierQueue.js";
+import { checkWebhookReplay, extractWebhookNonce, extractWebhookTimestamp } from "./webhooks/replayGuard.js";
 import { handleDeliveryConfirmation } from "./autoRelease/service.js";
 import { getWebhookIdempotencyKey, runIdempotently } from "./autoRelease/idempotency.js";
 import { EscrowDisputedError, EscrowNotReleasableError } from "./autoRelease/types.js";
@@ -46,6 +47,8 @@ import { runAutoMediation, type AutoMediationInput } from "./disputes/mediator.j
 import { runTimeoutRefundSweep } from "./workers/timeoutRefund.js";
 import { executePartialRefund, InvalidPartialRefundAmountError } from "./disputes/partialRefund.js";
 import { getDisputeStore } from "./disputes/disputeStore.js";
+import { checkOrderAccess, extractRequesterAddress, extractRequesterRole } from "./disputes/accessControl.js";
+import { findPaymentRecordByEscrowId } from "./escrowCoordinator/paymentRecordStore.js";
 import { listAuditLogForDispute } from "./disputes/auditLog.js";
 import {
   DisputeAlreadyResolvedError,
@@ -569,6 +572,21 @@ export function registerRoutes(): Route[] {
           return;
         }
 
+        // Issue #352 — timestamp tolerance + nonce replay protection, on top
+        // of the HMAC signature check above (a valid signature alone
+        // doesn't stop an intercepted request being replayed indefinitely).
+        const replayCheck = await checkWebhookReplay("delivery-confirmation", {
+          timestamp: extractWebhookTimestamp(req.headers as Record<string, string | string[] | undefined>),
+          nonce: extractWebhookNonce(req.headers as Record<string, string | string[] | undefined>),
+        });
+        if (!replayCheck.ok) {
+          json(res, 400, {
+            data: null,
+            error: { code: replayCheck.code ?? "REPLAY_REJECTED", message: replayCheck.message },
+          });
+          return;
+        }
+
         const { webhookId, orderId, escrowId, escrowContractId, callerAddress, confirmedAt } = body;
 
         if (
@@ -662,12 +680,38 @@ export function registerRoutes(): Route[] {
       }
     }),
 
-    route("GET", "/disputes/:disputeId", async (_req, res, params) => {
+    // Issue #350 — IDOR mitigation: verify the requester is actually a
+    // party to the dispute's underlying order before returning it.
+    route("GET", "/disputes/:disputeId", async (req, res, params) => {
       const dispute = await getDisputeStore().findById(params.disputeId);
       if (!dispute) {
         json(res, 404, { data: null, error: { code: "DISPUTE_NOT_FOUND", message: `Dispute ${params.disputeId} not found` } });
         return;
       }
+
+      const requesterAddress = extractRequesterAddress(
+        req.headers as Record<string, string | string[] | undefined>
+      );
+      // Only hit the payment-record store once we actually have an
+      // authenticated identity to check — callers that don't send one yet
+      // (not migrated to the gateway's identity header) are unaffected.
+      if (requesterAddress) {
+        const requesterRole = extractRequesterRole(
+          req.headers as Record<string, string | string[] | undefined>
+        );
+        const paymentRecord = dispute.escrowId
+          ? await findPaymentRecordByEscrowId(dispute.escrowId)
+          : null;
+        const access = checkOrderAccess(paymentRecord, requesterAddress, requesterRole);
+        if (!access.ok) {
+          json(res, 403, {
+            data: null,
+            error: { code: "FORBIDDEN", message: "You do not have access to this dispute" },
+          });
+          return;
+        }
+      }
+
       const auditLog = await listAuditLogForDispute(params.disputeId);
       json(res, 200, { data: { ...dispute, auditLog }, error: null });
     }),
@@ -807,6 +851,23 @@ export function registerRoutes(): Route[] {
           json(res, 401, {
             data: null,
             error: { code: "UNAUTHORIZED", message: "Invalid or missing webhook signature" },
+          });
+          return;
+        }
+
+        // Issue #352 — timestamp tolerance + nonce replay protection, on top
+        // of the X-Idempotency-Key based response caching below (which
+        // already makes a retried request with the same key safe to
+        // resend, but doesn't bound how stale a request can be, nor dedupe
+        // across a *different* idempotency key replaying the same nonce).
+        const replayCheck = await checkWebhookReplay("escrow-delivery-confirmed", {
+          timestamp: extractWebhookTimestamp(req.headers as Record<string, string | string[] | undefined>),
+          nonce: extractWebhookNonce(req.headers as Record<string, string | string[] | undefined>),
+        });
+        if (!replayCheck.ok) {
+          json(res, 400, {
+            data: null,
+            error: { code: replayCheck.code ?? "REPLAY_REJECTED", message: replayCheck.message },
           });
           return;
         }
@@ -1057,6 +1118,25 @@ export function registerRoutes(): Route[] {
         const validated = validateEasyPostPayload(parsed);
         if (!validated.ok) {
           sendValidationError(res, validated.error);
+          return;
+        }
+
+        // Issue #352 — timestamp tolerance + nonce replay protection, on top
+        // of the HMAC signature check above. EasyPost's own `id` already
+        // drives at-most-once queue processing via the BullMQ jobId
+        // (see enqueueCarrierEvent), and EasyPost legitimately redelivers
+        // the same id on retry — expecting a 200 ack each time — so this
+        // only enforces the Redis-backed nonce dedupe for carriers that
+        // send a dedicated X-Webhook-Nonce header.
+        const replayCheck = await checkWebhookReplay("carrier-easypost", {
+          timestamp: extractWebhookTimestamp(req.headers as Record<string, string | string[] | undefined>),
+          nonce: extractWebhookNonce(req.headers as Record<string, string | string[] | undefined>),
+        });
+        if (!replayCheck.ok) {
+          json(res, 400, {
+            data: null,
+            error: { code: replayCheck.code ?? "REPLAY_REJECTED", message: replayCheck.message },
+          });
           return;
         }
 

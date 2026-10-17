@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { maskPii, maskPiiDeep } from "./piiMasking.js";
 
 /** Minimal structured logger — no external dependencies */
 
@@ -33,12 +34,15 @@ export function createLogger(service: string, level = "info"): Logger {
     meta?: Record<string, unknown>
   ): void {
     if (levels.indexOf(lvl) < minLevel) return;
+    // Scrub PII (emails, phone numbers, credit card / bank identifiers,
+    // Stellar secret keys) from the message and metadata before the entry
+    // is ever serialized — see #355.
     const entry = {
       timestamp: new Date().toISOString(),
       level: lvl,
       service,
-      message,
-      ...meta,
+      message: maskPii(message),
+      ...maskPiiDeep(meta ?? {}),
       ...getLogContext(),
     };
     // eslint-disable-next-line no-console

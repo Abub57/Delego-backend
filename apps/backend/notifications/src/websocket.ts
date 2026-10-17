@@ -3,7 +3,12 @@ import type { Server, IncomingMessage } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
 import { randomUUID } from "node:crypto";
 import jwt from "jsonwebtoken";
-import { createLogger } from "@delegolabs/utils";
+import {
+  createLogger,
+  enableSocketKeepAlive,
+  WebSocketStallMonitor,
+  type WebSocketMonitorConfig,
+} from "@delegolabs/utils";
 import { getSubscriberClient, publishNotification } from "./redis/client.js";
 
 const SERVICE_NAME = "notifications";
@@ -47,6 +52,22 @@ export function resolveJwtSecret(
 const JWT_SECRET = resolveJwtSecret();
 const HEARTBEAT_TIMEOUT = 60_000; // 60 seconds
 
+/**
+ * Issue #343 — a network drop can silently kill the TCP connection
+ * underneath a client's WebSocket without either side ever seeing a
+ * `close`/`error` event: the app-level JSON `{type: "ping"}` heartbeat
+ * above only catches this if the *client* is still alive enough to send
+ * one. This config drives a server-initiated, protocol-level ping/pong
+ * check (native WebSocket ping frames) that detects and recycles a
+ * genuinely stalled socket within 30 seconds, independent of the client.
+ */
+const STALL_MONITOR_CONFIG: WebSocketMonitorConfig = {
+  heartbeatIntervalMs: 10_000,
+  readTimeoutMs: 30_000,
+  reconnectBackoffMs: 1_000,
+  maxConsecutiveMisses: 3,
+};
+
 export interface PushConnection {
   connectionId: string;
   userId: string;
@@ -55,6 +76,7 @@ export interface PushConnection {
   lastHeartbeatAt: string;
   ws: WebSocket;
   heartbeatTimeout?: NodeJS.Timeout;
+  stallMonitor?: WebSocketStallMonitor;
 }
 
 export interface PushNotificationEvent {
@@ -190,6 +212,38 @@ function handleConnection(ws: WebSocket, req: IncomingMessage) {
     connectionId,
     userId: decoded.userId,
   });
+
+  // Issue #343 — TCP keep-alive on the raw socket underneath this
+  // connection, so a genuinely dead peer is reported by the OS instead of
+  // hanging indefinitely with no close/error event.
+  enableSocketKeepAlive(req.socket);
+
+  // Issue #343 — server-initiated protocol-level ping/pong monitoring.
+  // Detects a silently stalled connection (no close/error event fired,
+  // but nothing is getting through) within 30s and recycles it, instead
+  // of relying solely on the client-driven JSON heartbeat below.
+  const stallMonitor = new WebSocketStallMonitor(
+    ws,
+    {
+      onStalled: (reason) => {
+        log.warn("Stalled WebSocket connection detected, recycling", {
+          connectionId,
+          userId: decoded.userId,
+          reason,
+        });
+        if (connection.heartbeatTimeout) {
+          clearTimeout(connection.heartbeatTimeout);
+        }
+        connections.delete(connectionId);
+        if (![...connections.values()].some((item) => item.userId === decoded.userId)) {
+          broadcastPresence(decoded.userId, false);
+        }
+      },
+    },
+    STALL_MONITOR_CONFIG
+  );
+  stallMonitor.start();
+  connection.stallMonitor = stallMonitor;
 
   const resetHeartbeat = () => {
     if (connection.heartbeatTimeout) {

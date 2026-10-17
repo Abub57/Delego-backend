@@ -1,4 +1,28 @@
 import type { SpanAttributeValue, SpanData, SpanExporter } from "./types.js";
+import { maskPii } from "../piiMasking.js";
+
+/**
+ * Scrub PII (emails, phone numbers, credit card / bank identifiers, Stellar
+ * secret keys) out of a span's name, string attributes, and status message
+ * before it is published to the collector — see #355. Non-string attribute
+ * values are left untouched.
+ */
+function scrubSpan(span: SpanData): SpanData {
+  const attributes: Record<string, SpanAttributeValue> = {};
+  for (const [key, value] of Object.entries(span.attributes)) {
+    attributes[key] = typeof value === "string" ? maskPii(value) : value;
+  }
+
+  return {
+    ...span,
+    name: maskPii(span.name),
+    attributes,
+    status: {
+      ...span.status,
+      ...(span.status.message ? { message: maskPii(span.status.message) } : {}),
+    },
+  };
+}
 
 /** Collects spans in memory — for tests and local debugging. */
 export class InMemorySpanExporter implements SpanExporter {
@@ -36,7 +60,8 @@ function toAnyValue(value: SpanAttributeValue): Record<string, unknown> {
 /** Build an OTLP/HTTP JSON `ExportTraceServiceRequest` body. */
 export function buildOtlpPayload(spans: SpanData[]): Record<string, unknown> {
   const byService = new Map<string, SpanData[]>();
-  for (const span of spans) {
+  for (const rawSpan of spans) {
+    const span = scrubSpan(rawSpan);
     const list = byService.get(span.serviceName) ?? [];
     list.push(span);
     byService.set(span.serviceName, list);
