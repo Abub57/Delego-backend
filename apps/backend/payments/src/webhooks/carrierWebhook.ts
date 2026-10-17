@@ -9,6 +9,7 @@
  * Scope: apps/backend/payments/src/webhooks/carrierWebhook.ts
  */
 
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { createLogger } from "@delegolabs/utils";
 
 const log = createLogger("payments:webhooks:carrier", process.env.LOG_LEVEL ?? "info");
@@ -108,6 +109,52 @@ export function extractCarrierSignature(
     if (typeof raw === "string" && raw.length > 0) return raw;
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Timing-safe HMAC verification (Issue #351)
+// ---------------------------------------------------------------------------
+
+/** Accepts a "sha256=<hex>" style prefix in addition to a bare hex digest. */
+function stripSignaturePrefix(signature: string): string {
+  const trimmed = signature.trim();
+  const eq = trimmed.indexOf("=");
+  if (eq > 0 && /^[a-z0-9]+$/i.test(trimmed.slice(0, eq))) {
+    return trimmed.slice(eq + 1);
+  }
+  return trimmed;
+}
+
+/**
+ * Timing-safe HMAC-SHA256 verification for incoming carrier webhooks.
+ *
+ * `crypto.timingSafeEqual` throws a `RangeError` when its two buffers have
+ * different lengths, so comparing a trusted `expected` digest directly
+ * against an attacker-controlled `providedSignature` of arbitrary length
+ * can't use it without first branching on `.length` — and an early return
+ * on that branch alone is its own (minor) length-oracle side channel.
+ *
+ * Both signatures are instead re-hashed to a fixed-size SHA-256 digest
+ * before the constant-time comparison. Digests are always 32 bytes
+ * regardless of the input length, so `timingSafeEqual` can run
+ * unconditionally — no length check, no early return, no exception.
+ */
+export function timingSafeHmacVerify(
+  payload: string | Buffer,
+  secret: string,
+  providedSignature: string | undefined | null
+): boolean {
+  if (!secret) {
+    return false;
+  }
+
+  const expected = createHmac("sha256", secret).update(payload).digest("hex");
+  const provided = stripSignaturePrefix(providedSignature ?? "");
+
+  const expectedDigest = createHash("sha256").update(expected, "utf8").digest();
+  const providedDigest = createHash("sha256").update(provided, "utf8").digest();
+
+  return timingSafeEqual(providedDigest, expectedDigest);
 }
 
 // ---------------------------------------------------------------------------

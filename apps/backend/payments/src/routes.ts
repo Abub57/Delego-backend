@@ -17,6 +17,7 @@ import {
   extractCarrierSignature,
   getCarrierWebhookSecret,
   normalizeEasyPostEvent,
+  timingSafeHmacVerify,
   validateEasyPostPayload,
 } from "./webhooks/carrierWebhook.js";
 import { enqueueCarrierEvent } from "./webhooks/carrierQueue.js";
@@ -1038,7 +1039,9 @@ export function registerRoutes(): Route[] {
         const signature = extractCarrierSignature(
           req.headers as Record<string, string | string[] | undefined>
         );
-        if (!verifyWebhookSignature(rawBody, signature, secret)) {
+        // Issue #351: strictly timing-safe comparison via crypto.timingSafeEqual
+        // (carrier-specific — see timingSafeHmacVerify in carrierWebhook.ts).
+        if (!signature || !timingSafeHmacVerify(rawBody, secret, signature)) {
           json(res, 401, {
             data: null,
             error: { code: "UNAUTHORIZED", message: "Invalid or missing webhook signature" },
