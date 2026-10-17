@@ -10,6 +10,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Route, RouteHandler } from "@delegolabs/utils";
 import { route } from "@delegolabs/utils";
+import { sseClientPool } from "./sse/clientPool.js";
 
 export interface MetricSeries {
   labels: Record<string, string>;
@@ -217,6 +218,21 @@ export class GatewayMetrics {
         lines.push(`http_request_duration_seconds_sum${labels} ${entry.sum}`);
       }
     }
+
+    // sse_active_connections / process heap (#337) — tracked so a leaking
+    // SSE client pool shows up in dashboards before it OOMs the process.
+    const sseStats = sseClientPool.stats();
+    lines.push("# HELP gateway_sse_active_connections Open SSE connections tracked by the client pool.");
+    lines.push("# TYPE gateway_sse_active_connections gauge");
+    lines.push(`gateway_sse_active_connections ${sseStats.activeConnections}`);
+
+    lines.push("# HELP gateway_process_heap_used_bytes Node.js process heap used, in bytes.");
+    lines.push("# TYPE gateway_process_heap_used_bytes gauge");
+    lines.push(`gateway_process_heap_used_bytes ${sseStats.heapUsedBytes}`);
+
+    lines.push("# HELP gateway_process_rss_bytes Node.js process resident set size, in bytes.");
+    lines.push("# TYPE gateway_process_rss_bytes gauge");
+    lines.push(`gateway_process_rss_bytes ${sseStats.rssBytes}`);
 
     return lines.join("\n") + "\n";
   }

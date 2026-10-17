@@ -126,6 +126,20 @@ export const UserPreferencesSchema = z.object({
   notificationsEnabled: z.boolean(),
 });
 
+/**
+ * Validates and parses a Stroop/i128 currency amount transmitted as a
+ * decimal integer string (#338). Amounts must never be carried as JSON
+ * `number` — values beyond Number.MAX_SAFE_INTEGER (2^53 - 1) silently lose
+ * precision when parsed as a JS number, so every REST/SDK boundary that
+ * carries a Stellar stroop amount parses it with this schema instead.
+ */
+export const BigIntStringSchema = z
+  .string()
+  .regex(/^-?\d+$/, "Must be a valid integer string")
+  .transform((val) => BigInt(val));
+
+export type BigIntString = z.infer<typeof BigIntStringSchema>;
+
 export const ApiErrorSchema = z.object({
   code: z.string(),
   message: z.string(),

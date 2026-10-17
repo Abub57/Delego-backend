@@ -6,6 +6,7 @@ import { getRequestContext } from "../middleware/requestId.js";
 import { validateSchema, AgentChatSchema } from "../src/validation.js";
 import { readJsonBody, InvalidJsonError, BodyTooLargeError } from "../src/request.js";
 import { badRequest, unauthorized, sendApiError } from "../src/errors.js";
+import { sseClientPool } from "../src/sse/clientPool.js";
 import type { LLMMessage } from "@delegolabs/types";
 
 const log = createLogger("gateway:agent-chat", process.env.LOG_LEVEL ?? "info");
@@ -115,6 +116,7 @@ export async function pipeLLMStreamToResponse(
   res: ServerResponse,
   generator: LLMStreamGenerator,
   runId: string,
+  sessionId?: string,
 ): Promise<void> {
   let flushedDone = false;
 
@@ -129,6 +131,7 @@ export async function pipeLLMStreamToResponse(
       if (!frame) continue;
 
       res.write(frame);
+      if (sessionId) sseClientPool.touch(sessionId);
 
       if (ev.type === "done") {
         flushedDone = true;
@@ -199,6 +202,11 @@ export async function agentChatHandler(
       (res as any).flush();
     }
 
+    // Track this connection in the SSE client pool (#337) so it's heartbeat
+    // -checked and reliably cleaned up even if the client disconnects
+    // behind a proxy that never surfaces req 'close'.
+    sseClientPool.register(req, res, { sessionId: runId, userId: auth.userId });
+
     const messages: LLMMessage[] = body.messages as LLMMessage[];
 
     const generator = configuredStreamProvider(agentId, messages, {
@@ -215,13 +223,14 @@ export async function agentChatHandler(
       messageCount: messages.length,
     });
 
-    await pipeLLMStreamToResponse(res, generator, runId);
+    await pipeLLMStreamToResponse(res, generator, runId, runId);
 
     log.info("Agent chat stream completed", {
       runId,
       agentId,
       userId: auth.userId,
     });
+    sseClientPool.remove(runId);
   } catch (err: any) {
     if (err instanceof InvalidJsonError || err instanceof BodyTooLargeError) {
       if (!res.headersSent) {

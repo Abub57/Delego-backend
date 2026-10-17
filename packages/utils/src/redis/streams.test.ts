@@ -478,6 +478,38 @@ describe("RedisStreamManager", () => {
       expect(result.failed).toBe(0);
     });
 
+    it("never crashes on a corrupted payload — archives it to the poison stream instead (#334)", async () => {
+      await manager.initialize();
+
+      // Simulate a message with invalid JSON in its payload field, bypassing
+      // the normal publish() path (e.g. a producer bug or bit-flip on the wire).
+      await client.xAdd("events", "*", {
+        id: "corrupt-1",
+        type: "payment.created",
+        payload: "{not valid json",
+        metadata: "{}",
+        timestamp: new Date().toISOString(),
+      });
+
+      const handler = vi.fn(async () => {});
+
+      const result = await manager.processWithConsumerGroup(
+        "payment-group",
+        "consumer-1",
+        handler
+      );
+
+      expect(result.poisoned).toBe(1);
+      expect(result.failed).toBe(0);
+      expect(handler).not.toHaveBeenCalled();
+
+      // The corrupted message is archived for manual inspection and
+      // acknowledged so it is never redelivered.
+      expect(await client.xLen("events:poison")).toBe("1");
+      const pending = await client.xPending("events", "payment-group");
+      expect(parseInt(pending[0] as string, 10)).toBe(0);
+    });
+
     it("should handle exactly-once with pending entries", async () => {
       await manager.initialize();
       await manager.publish("payment.created", { amount: 100, currency: "USD" });
