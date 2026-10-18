@@ -190,6 +190,7 @@ describe("SorobanEventIngestionWorker", () => {
     expect(count).toBe(1);
     expect(mockRedis.xadd).toHaveBeenCalledWith(
       "soroban:events", "*",
+      "eventId", "e1",
       "contractId", "CB1",
       "topic", "deposit",
       "data", expect.any(String),
