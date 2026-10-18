@@ -1,1 +1,23 @@
-import { describe, expect, it } from "vitest";\nimport { calculateMerchantSettlements, settlementCsv } from "./batch.js";\n\nconst start = new Date("2026-01-01T00:00:00.000Z");\nconst end = new Date("2026-01-02T00:00:00.000Z");\n\ndescribe("merchant settlement batch calculation", () => {\n  it("balances gross amount, fee, and net payout by merchant", () => {\n    const result = calculateMerchantSettlements([\n      { orderId: "b", merchantId: "m1", payoutAddress: "G1", grossAmount: 1000n, completedAt: new Date("2026-01-01T01:00:00Z"), status: "completed" },\n      { orderId: "a", merchantId: "m1", payoutAddress: "G1", grossAmount: 3000n, completedAt: new Date("2026-01-01T02:00:00Z"), status: "completed" },\n      { orderId: "outside", merchantId: "m1", payoutAddress: "G1", grossAmount: 9000n, completedAt: end, status: "completed" },\n    ], start, end, 250n);\n    expect(result).toHaveLength(1);\n    expect(result[0]).toMatchObject({ totalGrossAmount: 4000n, platformFees: 100n, netDisbursement: 3900n, orderCount: 2, orderIds: ["a", "b"] });\n  });\n\n  it("emits a deterministic CSV report with bigint values intact", () => {\n    const [settlement] = calculateMerchantSettlements([{ orderId: "1", merchantId: "m", payoutAddress: "G", grossAmount: 1000000000000000001n, completedAt: new Date("2026-01-01T00:00:00Z"), status: "completed" }], start, end);\n    expect(settlementCsv([settlement!])).toContain("1000000000000000001");\n    expect(settlementCsv([settlement!]).split("\\n")).toHaveLength(3);\n  });\n});\n
+import { describe, expect, it } from "vitest";
+import { calculateMerchantSettlements, settlementCsv } from "./batch.js";
+
+const start = new Date("2026-01-01T00:00:00.000Z");
+const end = new Date("2026-01-02T00:00:00.000Z");
+
+describe("merchant settlement batch calculation", () => {
+  it("balances gross amount, fee, and net payout by merchant", () => {
+    const result = calculateMerchantSettlements([
+      { orderId: "b", merchantId: "m1", payoutAddress: "G1", grossAmount: 1000n, completedAt: new Date("2026-01-01T01:00:00Z"), status: "completed" },
+      { orderId: "a", merchantId: "m1", payoutAddress: "G1", grossAmount: 3000n, completedAt: new Date("2026-01-01T02:00:00Z"), status: "completed" },
+      { orderId: "outside", merchantId: "m1", payoutAddress: "G1", grossAmount: 9000n, completedAt: end, status: "completed" },
+    ], start, end, 250n);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ totalGrossAmount: 4000n, platformFees: 100n, netDisbursement: 3900n, orderCount: 2, orderIds: ["a", "b"] });
+  });
+
+  it("emits a deterministic CSV report with bigint values intact", () => {
+    const [settlement] = calculateMerchantSettlements([{ orderId: "1", merchantId: "m", payoutAddress: "G", grossAmount: 1000000000000000001n, completedAt: new Date("2026-01-01T00:00:00Z"), status: "completed" }], start, end);
+    expect(settlementCsv([settlement!])).toContain("1000000000000000001");
+    expect(settlementCsv([settlement!]).split("\n")).toHaveLength(3);
+  });
+});

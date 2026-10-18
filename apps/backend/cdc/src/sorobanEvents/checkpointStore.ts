@@ -152,6 +152,12 @@ export class PostgresCheckpointStore implements CheckpointStore {
  * Idempotency log for event bus writes.  The worker checks this before every
  * XADD so that a crash-recovery backfill never double-publishes an event.
  */
+export interface ProcessedEventStoreEntry {
+  eventId: string;
+  contractId: string;
+  ledgerSequence: number;
+}
+
 export interface ProcessedEventStore {
   /**
    * Check whether `eventId` was already published.
@@ -163,6 +169,20 @@ export interface ProcessedEventStore {
    * safe (ON CONFLICT DO NOTHING / Map.set is a no-op for the same key).
    */
   markPublished(eventId: string, contractId: string, ledgerSequence: number): Promise<void>;
+
+  /**
+   * Batched dedup check (Issue #335). Returns the subset of `eventIds` that
+   * have already been published, in a single round trip instead of one query
+   * per event — the shape that lets a bulk backfill page stay within the
+   * CDC pool's connection budget during a ledger-sync spike.
+   */
+  hasMany(eventIds: string[]): Promise<Set<string>>;
+
+  /**
+   * Batched insert (Issue #335) — records an entire ingestion page as
+   * published in one statement rather than one `INSERT` per event.
+   */
+  markPublishedMany(entries: ProcessedEventStoreEntry[]): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +198,14 @@ export class InMemoryProcessedEventStore implements ProcessedEventStore {
 
   async markPublished(eventId: string, _contractId: string, _ledgerSequence: number): Promise<void> {
     this.published.add(eventId);
+  }
+
+  async hasMany(eventIds: string[]): Promise<Set<string>> {
+    return new Set(eventIds.filter((id) => this.published.has(id)));
+  }
+
+  async markPublishedMany(entries: ProcessedEventStoreEntry[]): Promise<void> {
+    for (const entry of entries) this.published.add(entry.eventId);
   }
 
   size(): number {
@@ -218,6 +246,44 @@ export class PostgresProcessedEventStore implements ProcessedEventStore {
        VALUES ($1, $2, $3, NOW())
        ON CONFLICT (event_id) DO NOTHING`,
       [eventId, contractId, ledgerSequence]
+    );
+  }
+
+  /**
+   * Batched dedup lookup — one `= ANY($1)` query for a whole ingestion page
+   * instead of one `SELECT` per event, so a bulk backfill burst issues a
+   * single round trip against the pool rather than dozens.
+   */
+  async hasMany(eventIds: string[]): Promise<Set<string>> {
+    if (eventIds.length === 0) return new Set();
+    const res = await this.pool.query<{ event_id: string }>(
+      `SELECT event_id FROM soroban_processed_events WHERE event_id = ANY($1::text[])`,
+      [eventIds]
+    );
+    return new Set(res.rows.map((row) => row.event_id));
+  }
+
+  /**
+   * Batched insert — records an entire page of newly-published events in one
+   * statement (via `UNNEST`) instead of one `INSERT` per event. This is the
+   * core fix for Issue #335: during a ledger-sync spike, a 50-event backfill
+   * page previously opened up to 50 sequential query round trips against a
+   * pool capped at a handful of connections.
+   */
+  async markPublishedMany(entries: ProcessedEventStoreEntry[]): Promise<void> {
+    if (entries.length === 0) return;
+    this.log.debug("Recording Soroban event batch as published", { count: entries.length });
+
+    const eventIds = entries.map((e) => e.eventId);
+    const contractIds = entries.map((e) => e.contractId);
+    const ledgerSequences = entries.map((e) => e.ledgerSequence);
+
+    await this.pool.query(
+      `INSERT INTO soroban_processed_events (event_id, contract_id, ledger_sequence, published_at)
+       SELECT event_id, contract_id, ledger_sequence, NOW()
+       FROM UNNEST($1::text[], $2::text[], $3::int[]) AS t(event_id, contract_id, ledger_sequence)
+       ON CONFLICT (event_id) DO NOTHING`,
+      [eventIds, contractIds, ledgerSequences]
     );
   }
 }

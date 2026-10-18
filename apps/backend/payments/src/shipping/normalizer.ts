@@ -135,6 +135,109 @@ export function canTransition(
   return RANK[to] > RANK[from];
 }
 
+// ---------------------------------------------------------------------------
+// Checkpoint-aware normalization (Issue #341)
+//
+// Carrier webhooks (DHL, FedEx, UPS) frequently report a scan event with no
+// resolved location yet — e.g. "label created" before the parcel has reached
+// a facility, or a mid-transit scan the carrier hasn't geocoded. Treating the
+// checkpoint object as always-present threw `TypeError: Cannot read
+// properties of undefined` deep in the ingestion pipeline. Everything below
+// extracts what's there and falls back to `null`/defaults for what isn't;
+// nothing here ever throws on a sparse or absent checkpoint.
+// ---------------------------------------------------------------------------
+
+/** Raw checkpoint shape as carriers send it — every field may be missing or null. */
+export interface RawCarrierCheckpoint {
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
+  timestamp?: string | null;
+  statusDetails?: string | null;
+  /** Some providers (EasyPost) use `message` instead of `statusDetails`. */
+  message?: string | null;
+}
+
+/** Cleaned checkpoint; only fields the carrier actually sent are present. */
+export interface CarrierCheckpoint {
+  city?: string;
+  state?: string;
+  country?: string;
+  timestamp?: string;
+  statusDetails?: string;
+}
+
+/** Provider-agnostic normalized tracking event, per issue #341's schema. */
+export interface NormalizedTrackingEvent {
+  trackingNumber: string;
+  carrier: string;
+  status: CanonicalDeliveryState;
+  checkpoint: CarrierCheckpoint | null;
+  occurredAt: Date;
+}
+
+export interface RawCarrierTrackingInput {
+  carrier: string;
+  trackingNumber: string;
+  status: string | null | undefined;
+  checkpoint?: RawCarrierCheckpoint | null;
+}
+
+function cleanOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+/**
+ * Safely extracts whatever location/timestamp data a carrier checkpoint
+ * actually contains. Returns `null` when the checkpoint is missing entirely
+ * or carries no usable fields — never throws on `undefined`/`null` input or
+ * on individual missing fields (the exact "sparse webhook payload" case
+ * from DHL, FedEx, and UPS that issue #341 reports crashing the normalizer).
+ */
+export function extractCarrierCheckpoint(
+  raw: RawCarrierCheckpoint | null | undefined
+): CarrierCheckpoint | null {
+  if (!raw) return null;
+
+  const checkpoint: CarrierCheckpoint = {};
+  const city = cleanOptionalString(raw.city);
+  if (city) checkpoint.city = city;
+  const state = cleanOptionalString(raw.state);
+  if (state) checkpoint.state = state;
+  const country = cleanOptionalString(raw.country);
+  if (country) checkpoint.country = country;
+  const timestamp = cleanOptionalString(raw.timestamp);
+  if (timestamp) checkpoint.timestamp = timestamp;
+  const statusDetails = cleanOptionalString(raw.statusDetails) ?? cleanOptionalString(raw.message);
+  if (statusDetails) checkpoint.statusDetails = statusDetails;
+
+  return Object.keys(checkpoint).length > 0 ? checkpoint : null;
+}
+
+/**
+ * Normalizes a raw carrier webhook payload into a {@link NormalizedTrackingEvent}.
+ * Zero uncaught `TypeError`s: a missing/undefined `checkpoint`, or a
+ * checkpoint missing its `timestamp`, never crashes ingestion — the status
+ * mapping and `occurredAt` both fall back to safe defaults instead.
+ */
+export function normalizeCarrierTrackingEvent(
+  input: RawCarrierTrackingInput
+): NormalizedTrackingEvent {
+  const status = mapCarrierStatus(input.carrier, input.status);
+  const checkpoint = extractCarrierCheckpoint(input.checkpoint);
+
+  const parsedTimestamp = checkpoint?.timestamp ? Date.parse(checkpoint.timestamp) : NaN;
+  const occurredAt = Number.isFinite(parsedTimestamp) ? new Date(parsedTimestamp) : new Date();
+
+  return {
+    trackingNumber: input.trackingNumber,
+    carrier: input.carrier,
+    status,
+    checkpoint,
+    occurredAt,
+  };
+}
+
 export interface TrackingDeps {
   getPreviousState: (trackingNumber: string) => Promise<CanonicalDeliveryState | undefined>;
   saveState: (payload: NormalizedTrackingPayload) => Promise<void>;

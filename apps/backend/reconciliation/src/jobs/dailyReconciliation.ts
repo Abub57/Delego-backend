@@ -15,9 +15,14 @@ export async function runDailyReconciliation(): Promise<void> {
 
   // Get configuration
   const accounts = process.env.RECONCILIATION_ACCOUNTS?.split(",") || ["all"];
+  // Window boundaries are computed from UTC calendar fields (Issue #339):
+  // `date.getDate()` / `setDate()` operate in the server's local timezone,
+  // which on a non-UTC host shifts the "daily" window away from the UTC day
+  // boundary used everywhere records are actually timestamped — splitting
+  // orders near midnight across the wrong settlement/reconciliation day.
   const date = new Date();
   const startDate = new Date(date);
-  startDate.setDate(date.getDate() - 1);
+  startDate.setUTCDate(date.getUTCDate() - 1);
   const endDate = date;
 
   // Create job
