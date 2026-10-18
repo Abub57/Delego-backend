@@ -247,6 +247,36 @@ describe("OTLP exporter", () => {
     expect(buildOtlpPayload([])).toEqual({ resourceSpans: [] });
   });
 
+  it("scrubs PII from span attributes before building the OTLP payload (#355)", () => {
+    const secret = `S${"C".repeat(55)}`;
+    const payload = buildOtlpPayload([
+      {
+        name: "op",
+        kind: "internal",
+        context: { traceId: "t1", spanId: "s1", traceFlags: 1 },
+        startTimeUnixNano: "0",
+        endTimeUnixNano: "1",
+        attributes: {
+          "customer.email": "buyer@example.com",
+          "stellar.secret": secret,
+          "http.status_code": 200,
+        },
+        status: { code: "error", message: `failed for buyer@example.com using ${secret}` },
+        serviceName: "gateway",
+      },
+    ]);
+
+    const otlpSpan = (payload as any).resourceSpans[0].scopeSpans[0].spans[0];
+    const attrs = Object.fromEntries(
+      otlpSpan.attributes.map((a: any) => [a.key, a.value.stringValue ?? a.value.intValue])
+    );
+    expect(attrs["customer.email"]).toBe("[REDACTED]");
+    expect(attrs["stellar.secret"]).toBe("[REDACTED]");
+    expect(attrs["http.status_code"]).toBe("200");
+    expect(otlpSpan.status.message).not.toContain(secret);
+    expect(otlpSpan.status.message).not.toContain("buyer@example.com");
+  });
+
   it("throws on non-2xx so the tracer can report it", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response("no", { status: 503 }));
     const exporter = new OtlpHttpSpanExporter({ endpoint: "http://c:4318", fetchImpl });
