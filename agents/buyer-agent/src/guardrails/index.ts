@@ -6,10 +6,13 @@ export type {
   GuardrailCheckResult,
   FlaggedCategory,
   ToolName,
+  SanitizedPromptInput,
+  ToolCallGuardrailPolicy,
 } from "./types.js";
 export {
   TOOL_SCHEMAS,
   SearchProductsParamsSchema,
   AddToCartParamsSchema,
   InitiateCheckoutParamsSchema,
+  DEFAULT_GUARDRAIL_POLICY,
 } from "./types.js";

@@ -49,3 +49,41 @@ export const TOOL_SCHEMAS: Record<ToolName, z.ZodTypeAny> = {
   add_to_cart: AddToCartParamsSchema,
   initiate_checkout: InitiateCheckoutParamsSchema,
 };
+
+// ── Prompt injection defense — Issue #349 ────────────────────────────────────
+
+/**
+ * Untrusted input separated from the trusted system prompt before it is
+ * assembled into a single LLM request. `userInstruction` and `catalogContext`
+ * are both wrapped in delimiter tags (`<user_data>` / `<catalog_data>`) so the
+ * model can distinguish "data to read" from "instructions to follow", and the
+ * fixed system policy is bound to the request via `systemPolicyHash` so a
+ * tampered or truncated policy can be detected downstream.
+ */
+export interface SanitizedPromptInput {
+  userInstruction: string;
+  catalogContext: string;
+  systemPolicyHash: string;
+  isFlaggedForInjection: boolean;
+}
+
+/**
+ * Guardrail policy enforced on every tool call the buyer agent emits, on top
+ * of per-tool Zod schema validation. `allowedToolNames` restricts which tools
+ * may be invoked for a given run (e.g. a read-only session omits
+ * `initiate_checkout`); `maxSpendingAmountPerCall` caps the stroop amount a
+ * single `initiate_checkout` call may request; `requireHumanApproval` forces
+ * every spending call to be queued for approval rather than executed
+ * immediately.
+ */
+export interface ToolCallGuardrailPolicy {
+  allowedToolNames: string[];
+  maxSpendingAmountPerCall: bigint;
+  requireHumanApproval: boolean;
+}
+
+export const DEFAULT_GUARDRAIL_POLICY: ToolCallGuardrailPolicy = {
+  allowedToolNames: ["search_products", "add_to_cart", "initiate_checkout"],
+  maxSpendingAmountPerCall: 1_000_000_000n, // 100 XLM, in stroops
+  requireHumanApproval: true,
+};

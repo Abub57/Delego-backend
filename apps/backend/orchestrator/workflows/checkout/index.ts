@@ -445,7 +445,14 @@ export async function checkoutWorkflow(
   coordinator: SagaCoordinator<CheckoutContext>,
   sagaId: string
 ): Promise<SagaRecord<CheckoutContext>> {
-  const inventoryItems = input.inventoryItems ?? [];
+  // Issue #342: stamp each reservation with the order id (defaulting to this
+  // workflow's orderId when the caller didn't set one) so the unique
+  // (merchant_id, order_id, product_id) constraint catches duplicate
+  // checkout retries for the same order.
+  const inventoryItems = (input.inventoryItems ?? []).map((item) => ({
+    ...item,
+    orderId: item.orderId ?? input.orderId,
+  }));
   const inventory = getInventoryReservationService();
   if (inventoryItems.length > 0) await inventory.reserve(inventoryItems);
 

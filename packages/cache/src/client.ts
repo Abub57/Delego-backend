@@ -34,7 +34,7 @@ import {
   RedisClusterFailoverClient,
   type ClusterNodeConnection,
 } from "./clusterFailover.js";
-import type { RedisClusterConfig, RedisNodeRole } from "./types.js";
+import type { RedisClusterConfig, RedisNodeRole, SentinelNodeConfig } from "./types.js";
 
 const log = createLogger("cache:client", process.env.LOG_LEVEL ?? "info");
 
@@ -94,8 +94,60 @@ export function clusterConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Redi
   };
 }
 
+/**
+ * Build a `SentinelNodeConfig` from environment variables (Issue #401 /
+ * Issue #340).
+ *
+ * `REDIS_SENTINELS` is a comma-separated `host:port` list of Sentinel
+ * processes. When Redis Sentinel promotes a new master during a failover,
+ * an ioredis client configured this way re-queries the Sentinels and
+ * reconnects to the promoted master automatically — it is not pinned to a
+ * stale host:port the way a plain single-node connection is, which is what
+ * previously left BullMQ workers hung on dead connection references while
+ * trying to renew job locks.
+ *
+ * Returns `null` when Sentinel is not configured, so callers can fall back
+ * to the existing cluster/single-node paths.
+ */
+export function sentinelConfigFromEnv(env: NodeJS.ProcessEnv = process.env): SentinelNodeConfig | null {
+  const raw = env.REDIS_SENTINELS?.trim();
+  if (!raw) return null;
+
+  const sentinels = raw.split(",").map((entry) => {
+    const [host, portStr] = entry.trim().split(":");
+    if (!host || !portStr || Number.isNaN(Number(portStr))) {
+      throw new Error(
+        `Invalid REDIS_SENTINELS entry "${entry.trim()}" — expected "host:port" (e.g. "sentinel-1:26379").`
+      );
+    }
+    return { host, port: Number(portStr) };
+  });
+
+  const role = env.REDIS_SENTINEL_ROLE === "slave" ? "slave" : "master";
+  const password = env.REDIS_PASSWORD?.trim();
+  const username = env.REDIS_USERNAME?.trim();
+  const sentinelTimeoutMs = env.REDIS_SENTINEL_TIMEOUT_MS ? Number(env.REDIS_SENTINEL_TIMEOUT_MS) : undefined;
+  const maxDiscoveryWaitMs = env.REDIS_SENTINEL_MAX_WAIT_MS ? Number(env.REDIS_SENTINEL_MAX_WAIT_MS) : undefined;
+
+  return {
+    sentinels,
+    masterName: env.REDIS_SENTINEL_MASTER?.trim() || "mymaster",
+    role,
+    ...(password ? { password } : {}),
+    ...(username ? { username } : {}),
+    ...(sentinelTimeoutMs !== undefined ? { sentinelTimeoutMs } : {}),
+    ...(maxDiscoveryWaitMs !== undefined ? { maxDiscoveryWaitMs } : {}),
+  };
+}
+
+/** True only when `REDIS_SENTINELS` names at least one Sentinel process. */
+export function isSentinelEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return sentinelConfigFromEnv(env) !== null;
+}
+
 let client: CacheRedisClient | null = null;
 let cluster: Cluster | null = null;
+let sentinelClient: Redis | null = null;
 let healthMonitor: RedisClusterHealthMonitor | null = null;
 
 function shouldUseMock(env: NodeJS.ProcessEnv): boolean {
@@ -157,6 +209,42 @@ export function getCacheClient(
     log.info("Using in-memory mock Redis client for cache module");
     const MockRedisConstructor = MockRedis as new () => CacheRedisClient;
     client = new MockRedisConstructor();
+    return client;
+  }
+
+  const sentinelConfig = sentinelConfigFromEnv(env);
+  if (sentinelConfig) {
+    log.info("Connecting cache client via Redis Sentinel", {
+      masterName: sentinelConfig.masterName,
+      role: sentinelConfig.role,
+      sentinelCount: sentinelConfig.sentinels.length,
+    });
+
+    sentinelClient = new Redis({
+      sentinels: sentinelConfig.sentinels,
+      name: sentinelConfig.masterName,
+      role: sentinelConfig.role,
+      sentinelRetryStrategy: config.retryStrategy,
+      retryStrategy: config.retryStrategy,
+      connectTimeout: sentinelConfig.sentinelTimeoutMs ?? config.connectTimeout,
+      commandTimeout: config.commandTimeout,
+      enableOfflineQueue: config.enableOfflineQueue,
+      maxRetriesPerRequest: null,
+      ...(sentinelConfig.password ? { password: sentinelConfig.password, sentinelPassword: sentinelConfig.password } : {}),
+      ...(sentinelConfig.username ? { username: sentinelConfig.username } : {}),
+    });
+
+    sentinelClient.on("error", (error: Error) => {
+      log.warn("Redis Sentinel connection error", { error: error.message });
+    });
+    sentinelClient.on("+switch-master", (...args: unknown[]) => {
+      log.warn("Redis Sentinel promoted a new master — ioredis reconnected automatically", { args });
+    });
+    sentinelClient.on("ready", () => {
+      log.info("Redis Sentinel client ready", { masterName: sentinelConfig.masterName });
+    });
+
+    client = sentinelClient as unknown as CacheRedisClient;
     return client;
   }
 
@@ -277,6 +365,7 @@ export function _setCacheClientForTesting(testClient: CacheRedisClient): void {
 export function _resetCacheClientForTesting(): void {
   client = null;
   cluster = null;
+  sentinelClient = null;
   healthMonitor?.stop();
   healthMonitor = null;
 }
@@ -290,4 +379,5 @@ export async function disconnectCacheClient(): Promise<void> {
     client = null;
   }
   cluster = null;
+  sentinelClient = null;
 }

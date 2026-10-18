@@ -81,4 +81,49 @@ describe("DistributedLockManager", () => {
     expect(await b.release(key)).toBe(false);
     expect((await a.inspect(key)).lock?.owner).toBe("instance-a");
   });
+
+  // Issue #340 — a Redis Sentinel failover can leave a renewal command
+  // hanging on a connection that is mid-reconnect to the newly promoted
+  // master. Simulate that by making `eval` (what `redisLockRenew` calls)
+  // never resolve, and assert `renew()` fails fast and releases ownership
+  // instead of hanging the renewal interval indefinitely.
+  it("fails fast and releases the lock when the connection hangs mid-renewal (simulated Sentinel failover)", async () => {
+    const key = lockKeyForWorkflow("wf-failover");
+    const acquired = await a.acquire(key, { ttlMs: 2_000, autoRenew: false });
+    expect(acquired.acquired).toBe(true);
+
+    const originalEval = redis.eval.bind(redis);
+    (redis as any).eval = (...args: unknown[]) => {
+      const [script] = args;
+      if (typeof script === "string" && script.includes("ARGV[3]")) {
+        // Simulate a stuck connection: never resolves, as if the command
+        // were queued against a demoted master during Sentinel failover.
+        return new Promise(() => {});
+      }
+      return originalEval(...(args as Parameters<typeof originalEval>));
+    };
+
+    const started = Date.now();
+    const renewed = await a.renew(key);
+    const elapsedMs = Date.now() - started;
+
+    expect(renewed).toBe(false);
+    expect(a.wasStolen(key)).toBe(true);
+    // Bounded by withRenewTimeout (<=5s cap), well under the hang this
+    // guards against.
+    expect(elapsedMs).toBeLessThan(5_500);
+
+    // Restore the real eval before the owner's lock key TTL is manipulated
+    // so the next acquire below exercises real Redis behaviour.
+    (redis as any).eval = originalEval;
+
+    // "Worker recovery": once the fail-fast release stops `a` from treating
+    // itself as the owner, another worker instance must be able to acquire
+    // the lock the original job was stuck on — proving the system recovers
+    // instead of deadlocking even though the original renewal never
+    // completed.
+    await redis.del(key);
+    const recovered = await b.acquire(key, { ttlMs: 2_000, autoRenew: false, waitTimeoutMs: 0 });
+    expect(recovered.acquired).toBe(true);
+  });
 });

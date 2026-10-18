@@ -6,6 +6,7 @@
 import { Queue } from 'bullmq';
 import type { ConnectionOptions } from 'bullmq';
 import { CircuitBreaker } from './circuitBreaker.js';
+import { serializeError } from './errorSerialization.js';
 import { DLQStore } from './store.js';
 import type { DeadLetterJobRecord, ReplayResult, ReplayRequest } from './types.js';
 
@@ -18,6 +19,55 @@ export class DLQService {
     private redisConnection: ConnectionOptions,
     private log: { info: (msg: string, meta?: any) => void; warn: (msg: string, meta?: any) => void; error: (msg: string, meta?: any) => void }
   ) {}
+
+  /**
+   * Move a failed BullMQ job to the DLQ, capturing the triggering error's
+   * full stack trace and `cause` chain (Issue #347) rather than just its
+   * message.
+   */
+  async addFailedJob(params: {
+    jobId: string;
+    queueName: string;
+    error: unknown;
+    attemptsMade: number;
+    payload: Record<string, unknown>;
+    failedAt?: string;
+  }): Promise<void> {
+    const serialized = serializeError(params.error);
+
+    await this.store.addJob({
+      jobId: params.jobId,
+      queueName: params.queueName,
+      failedReason: serialized.message,
+      stackTrace: serialized.stackTrace,
+      errorCauseChain: serialized.causeChain,
+      attemptsMade: params.attemptsMade,
+      payload: params.payload,
+      failedAt: params.failedAt ?? new Date().toISOString(),
+    });
+
+    this.log.warn('Job moved to DLQ', {
+      jobId: params.jobId,
+      queueName: params.queueName,
+      error: serialized.message,
+    });
+  }
+
+  /**
+   * List DLQ records for the management API, including full stack traces
+   * (Issue #347).
+   */
+  async listJobs(filter: { status?: string; queueName?: string; limit?: number } = {}) {
+    return this.store.getJobs(filter);
+  }
+
+  /**
+   * Fetch one DLQ record's full detail, including stack trace and cause
+   * chain, for the DLQ viewer API (Issue #347).
+   */
+  async getJobDetail(jobId: string, queueName: string) {
+    return this.store.getJobDetail(jobId, queueName);
+  }
 
   /**
    * Replay a single job
@@ -73,11 +123,18 @@ export class DLQService {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      // Mark as failed
-      await this.store.markFailed(jobId, queueName, errorMessage);
+      const serialized = serializeError(error);
 
-      this.log.error('Job replay failed', { jobId, queueName, error: errorMessage });
+      // Mark as failed, preserving the full stack trace (Issue #347) so
+      // repeated replay failures don't erase the original diagnostic context.
+      await this.store.markFailed(jobId, queueName, errorMessage, serialized.stackTrace);
+
+      this.log.error('Job replay failed', {
+        jobId,
+        queueName,
+        error: errorMessage,
+        stackTrace: serialized.stackTrace,
+      });
 
       return {
         success: false,
