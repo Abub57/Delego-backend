@@ -61,6 +61,8 @@ export interface StreamProcessingResult {
   processed: number;
   failed: number;
   retried: number;
+  /** Messages that failed to parse and were routed to the poison stream (#334). */
+  poisoned: number;
   avgProcessingMs: number;
   lag: number;
 }
@@ -82,6 +84,46 @@ export type ParsedStreamMessage<T = unknown> = {
   metadata: Record<string, string>;
   timestamp: string;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Poison-message handling (#334) — a message with invalid JSON or a missing
+// schema header must never crash the consumer worker. It's parsed defensively,
+// and on failure routed to a `<stream>:poison` stream (with the raw payload +
+// error) and ACKed off the original stream so it isn't redelivered forever.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Envelope for a raw stream message before/after safe parsing (#334). */
+export interface StreamMessageEnvelope<T = unknown> {
+  id: string;
+  stream: string;
+  payload: T;
+  receivedAt: Date;
+  retryCount: number;
+}
+
+export type ParseResult<T> =
+  | { success: true; data: T }
+  | { success: false; raw: string; error: string };
+
+/**
+ * Safely parses a raw stream message field with the supplied deserializer.
+ * Never throws — a malformed payload (invalid JSON, missing fields) is
+ * reported as a typed failure instead of propagating as an uncaught error.
+ */
+export function safeParseStreamPayload<T = unknown>(
+  raw: string,
+  deserializer: (data: string) => unknown = JSON.parse
+): ParseResult<T> {
+  try {
+    return { success: true, data: deserializer(raw) as T };
+  } catch (err) {
+    return {
+      success: false,
+      raw,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stream Manager
@@ -251,6 +293,7 @@ export class RedisStreamManager<T = unknown> {
       processed: 0,
       failed: 0,
       retried: 0,
+      poisoned: 0,
       avgProcessingMs: 0,
       lag: 0,
     };
@@ -307,6 +350,13 @@ export class RedisStreamManager<T = unknown> {
                 result.failed++;
                 result.retried++;
               }
+            } else {
+              // Corrupted payload (invalid JSON / missing schema headers) —
+              // never retry a message that can never parse. Archive it and
+              // ACK it off the pending list so it stops being redelivered
+              // forever (#334).
+              await this.quarantine(claimed[0], groupName, msgId, deliveryCount);
+              result.poisoned++;
             }
           }
         }
@@ -339,6 +389,12 @@ export class RedisStreamManager<T = unknown> {
               });
               result.failed++;
             }
+          } else {
+            // Invalid JSON or missing schema headers — archive to the
+            // poison stream and ACK so the consumer never crashes on, or
+            // endlessly retries, a payload that can never parse (#334).
+            await this.quarantine(msg, groupName, msg.id, 1);
+            result.poisoned++;
           }
         }
       }
@@ -589,6 +645,73 @@ export class RedisStreamManager<T = unknown> {
         error: (err as Error).message,
       });
       return null;
+    }
+  }
+
+  /** `<streamName>:poison` — where unparseable messages are archived (#334). */
+  get poisonStreamName(): string {
+    return `${this.streamName}:poison`;
+  }
+
+  /**
+   * Archives a message that failed to parse to the poison stream (raw
+   * fields + the error) and ACKs it off the source stream's pending list,
+   * so a corrupted payload is never retried forever and never crashes the
+   * consumer — it's captured for manual inspection instead (#334).
+   */
+  private async quarantine(
+    msg: StreamMessage,
+    groupName: string,
+    msgId: string,
+    deliveryCount: number
+  ): Promise<void> {
+    const errorDetail = this.describeParseFailure(msg);
+
+    try {
+      await this.client.xAdd(this.poisonStreamName, "*", {
+        originalId: msg.id,
+        originalStream: this.streamName,
+        rawFields: JSON.stringify(msg.fields ?? {}),
+        error: errorDetail,
+        deliveryCount: String(deliveryCount),
+        quarantinedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      // Even if the poison stream write fails, never let that crash the
+      // consumer — log and continue; the message still gets ACKed below so
+      // the worker keeps making progress.
+      log.error("Failed to archive poisoned message to poison stream", {
+        messageId: msg.id,
+        poisonStream: this.poisonStreamName,
+        error: (err as Error).message,
+      });
+    }
+
+    try {
+      await this.client.xAck(this.streamName, groupName, msgId);
+    } catch (err) {
+      log.error("Failed to ACK poisoned message", {
+        messageId: msg.id,
+        error: (err as Error).message,
+      });
+    }
+
+    log.warn("Quarantined unparseable stream message", {
+      messageId: msg.id,
+      stream: this.streamName,
+      poisonStream: this.poisonStreamName,
+      error: errorDetail,
+    });
+  }
+
+  /** Best-effort human-readable reason a message failed to parse. */
+  private describeParseFailure(msg: StreamMessage): string {
+    try {
+      this.deserializer(msg.fields?.payload);
+      this.deserializer(msg.fields?.metadata);
+      return "missing or invalid schema headers";
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
     }
   }
 }

@@ -44,9 +44,26 @@ export function serializeContext(
   return entries.join(";");
 }
 
+// Reuses the SHA-256 AAD digest for a repeated encryption context (#333) —
+// the same { userId } / { orderId } context is typically fed into dozens of
+// field encrypt/decrypt calls for one request, and re-hashing it every time
+// is pure waste on the <2ms per-field hot path. Bounded so a service that
+// mints unbounded distinct contexts can't grow this without limit.
+const AAD_CACHE_MAX_ENTRIES = 2048;
+const aadDigestCache = new Map<string, Buffer>();
+
 /** SHA-256 digest of the serialized context — the actual AAD fed to GCM. */
 export function contextAad(context: Record<string, string> | undefined | null): Buffer {
-  return crypto.createHash("sha256").update(serializeContext(context), "utf8").digest();
+  const serialized = serializeContext(context);
+  const cached = aadDigestCache.get(serialized);
+  if (cached) return cached;
+
+  const digest = crypto.createHash("sha256").update(serialized, "utf8").digest();
+  if (aadDigestCache.size >= AAD_CACHE_MAX_ENTRIES) {
+    aadDigestCache.clear();
+  }
+  aadDigestCache.set(serialized, digest);
+  return digest;
 }
 
 /**

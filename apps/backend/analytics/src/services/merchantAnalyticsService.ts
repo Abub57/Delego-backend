@@ -7,7 +7,7 @@
 
 import { sequelize } from "../db.js";
 import { QueryTypes } from "sequelize";
-import { createLogger, type Logger } from "@delegolabs/utils";
+import { createLogger, sumDecimalStrings, type Logger } from "@delegolabs/utils";
 import type {
   MerchantAnalyticsQuery,
   MerchantAnalyticsResponse,
@@ -16,6 +16,16 @@ import type {
 } from "@delegolabs/types";
 
 const log = createLogger("analytics:merchantService", process.env.LOG_LEVEL ?? "info");
+
+/** Formats an exact decimal string to 2 fraction digits without floating point. */
+function formatFixed2(value: string): string {
+  const negative = value.startsWith("-");
+  const unsigned = negative ? value.slice(1) : value;
+  const [whole, fraction = ""] = unsigned.split(".");
+  const fixed = fraction.padEnd(2, "0").slice(0, 2);
+  const result = `${whole}.${fixed}`;
+  return negative && !/^0(\.0+)?$/.test(result) ? `-${result}` : result;
+}
 
 export class MerchantAnalyticsService {
   private readonly logger: Logger;
@@ -94,7 +104,9 @@ export class MerchantAnalyticsService {
       }));
 
       const totalOrders = aggregates.reduce((acc, curr) => acc + curr.orderCount, 0);
-      const totalVolumeNumber = aggregates.reduce((acc, curr) => acc + Number(curr.volume || 0), 0);
+      // Sum via exact BigInt-backed decimal arithmetic — `Number(volume)`
+      // silently loses precision once stroop volumes exceed 2^53 - 1 (#338).
+      const totalVolumeExact = sumDecimalStrings(aggregates.map((a) => a.volume || "0"));
 
       return {
         merchantId,
@@ -102,7 +114,7 @@ export class MerchantAnalyticsService {
         startTime,
         endTime,
         aggregates,
-        totalVolume: totalVolumeNumber.toFixed(2),
+        totalVolume: formatFixed2(totalVolumeExact),
         totalOrders,
       };
     } catch (err: any) {

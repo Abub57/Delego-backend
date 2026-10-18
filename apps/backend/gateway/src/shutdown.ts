@@ -16,6 +16,7 @@ import type { Server } from "node:http";
 import { createLogger } from "@delegolabs/utils";
 import { sequelize } from "./db.js";
 import { disconnectRedis } from "./rateLimit/redisClient.js";
+import { sseClientPool } from "./sse/clientPool.js";
 
 const log = createLogger("gateway:shutdown", process.env.LOG_LEVEL ?? "info");
 
@@ -88,6 +89,8 @@ export function registerGracefulShutdown(
     isShuttingDown = true;
 
     logger.info("Received shutdown signal — starting graceful teardown", { signal });
+
+    sseClientPool.stop();
 
     try {
       // Race server.close() against the drain deadline.  Whichever settles
