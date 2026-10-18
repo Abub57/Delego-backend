@@ -20,6 +20,7 @@ import type {
   SessionKeyPolicy,
   SignResult,
 } from './types.js';
+import { SessionKeyRevocationCache, isHighValueAmount } from './sessionKeyCache.js';
 
 /** Redis key prefix for session key records */
 const SESSION_KEY_PREFIX = 'session_key:';
@@ -35,6 +36,10 @@ export class SessionKeySigner {
       read: (path: string) => Promise<string | null>;
       write: (path: string, data: unknown) => Promise<void>;
     },
+    // Closes #344 — optional node-local revocation cache. Omitted for
+    // existing call sites/tests, which simply skip the fast-path check
+    // below and fall straight through to the Redis read, unchanged.
+    private readonly revocationCache?: SessionKeyRevocationCache,
   ) {}
 
   /**
@@ -105,13 +110,38 @@ export class SessionKeySigner {
    * Immediately denies if any check fails.
    */
   async signWithSessionKey(dto: SignWithSessionKeyDTO): Promise<SignResult> {
+    // Closes #344 — fast local rejection path. High-value transfers always
+    // skip this and go straight to the Redis read below, per the task's
+    // "query the distributed store directly for high-value transactions"
+    // requirement; the cache entry itself is also capped at a 5-second
+    // TTL (see sessionKeyCache.ts), so this can never serve a "not
+    // revoked" verdict more than 5 seconds stale even when it is used.
+    const highValue = isHighValueAmount(dto.requestedAmountStroops);
+    if (!highValue) {
+      const cached = this.revocationCache?.get(dto.sessionPublicKey);
+      if (cached?.isRevoked) {
+        return { success: false, error: 'Session key has been revoked' };
+      }
+    }
+
     // 1. Load session key record from Redis
     const raw = await this.redis.get(`${SESSION_KEY_PREFIX}${dto.sessionPublicKey}`);
     if (!raw) {
+      this.revocationCache?.delete(dto.sessionPublicKey);
       return { success: false, error: 'Session key not found or expired' };
     }
 
     const record: SessionKeyRecord = JSON.parse(raw);
+
+    // Keep the local cache warm for the fast path on the next call (not
+    // consulted for high-value transactions, which always re-check Redis).
+    this.revocationCache?.set({
+      keyId: record.vaultKeyPath,
+      publicKey: record.sessionPublicKey,
+      ownerAddress: record.userId,
+      expiresAtLedger: record.expiresAt,
+      isRevoked: false,
+    });
 
     // 2. Validate session key has not expired
     const now = Math.floor(Date.now() / 1000);
@@ -206,6 +236,14 @@ export class SessionKeySigner {
        WHERE session_public_key = $1`,
       [sessionPublicKey],
     );
+
+    // Closes #344 — propagate the revocation to every node's local cache
+    // immediately via Redis Pub/Sub, instead of relying solely on each
+    // node's next distributed-store check. If the broadcast itself is
+    // dropped (e.g. during network repartitioning), the 5-second local
+    // cache TTL (see sessionKeyCache.ts) still bounds how stale any node's
+    // view can get.
+    await this.revocationCache?.broadcastRevocation(sessionPublicKey);
   }
 
   /**

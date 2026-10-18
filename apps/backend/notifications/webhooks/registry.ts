@@ -21,8 +21,14 @@ export class WebhookRegistry {
   private webhooks: Map<string, Webhook> = new Map();
 
   register(input: RegisterWebhookInput): Webhook {
-    if (!input.url.startsWith("https://") && !input.url.startsWith("http://")) {
-      throw new Error(`Invalid webhook URL: ${input.url}`);
+    // Issue #348 — HTTPS exclusively. Plain HTTP is rejected outright (not
+    // just discouraged): it leaks the HMAC-signed payload on the wire, and
+    // DNS-rebinding/SSRF checks at send time (see ssrfGuard.ts) assume TLS.
+    // The hostname/private-IP checks themselves can only run at send time
+    // (DNS can change after registration), so this is a cheap, synchronous
+    // first line of defense, not the full guard.
+    if (!input.url.startsWith("https://")) {
+      throw new Error(`Invalid webhook URL: ${input.url} — only https:// URLs are accepted`);
     }
     if (input.events.length === 0) {
       throw new Error("A webhook must subscribe to at least one event");
