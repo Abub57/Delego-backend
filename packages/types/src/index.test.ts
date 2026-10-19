@@ -77,7 +77,7 @@ describe("@delegolabs/types", () => {
       merchantId: "m1",
       status: "pending_approval",
       lineItems: [],
-      totalStroops: 500n,
+      totalStroops: "500",
       escrowContractId: null,
       createdAt: new Date(),
       updatedAt: new Date(),
