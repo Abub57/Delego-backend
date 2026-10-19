@@ -1,6 +1,15 @@
 import { Pool } from "pg";
 import { Redis } from "ioredis";
 import Redlock from "redlock";
+import {
+  BullMqLowStockAlertPublisher,
+  LowStockAlertService,
+  PgProductDetailsLookup,
+  createLowStockQueue,
+  type DebounceRedis,
+  type InventoryLevel,
+  type StockLevelObserver,
+} from "./lowStockAlerts.js";
 
 export interface InventoryReservationItem {
   merchantId: string;
@@ -44,6 +53,8 @@ export class InventoryReservationService {
   constructor(
     private readonly pool: Pick<Pool, "connect">,
     private readonly redlock: ReservationLock,
+    /** Notified with post-commit stock levels (low-stock alerting). */
+    private readonly stockObserver?: StockLevelObserver,
   ) {}
 
   async reserve(items: InventoryReservationItem[]): Promise<void> {
@@ -73,13 +84,19 @@ export class InventoryReservationService {
     ))];
     const lock = await this.redlock.acquire(resources, 10_000);
     let client: Awaited<ReturnType<Pool["connect"]>> | undefined;
+    const levels = new Map<string, InventoryLevel>();
 
     try {
       client = await this.pool.connect();
       await client.query("BEGIN");
       for (const item of orderedItems) {
-        const { rows } = await client.query<{ id: string; available_stock: number; reserved_stock: number }>(
-          "SELECT id, available_stock, reserved_stock FROM merchant_inventory WHERE merchant_id = $1 AND product_id = $2 FOR UPDATE",
+        const { rows } = await client.query<{
+          id: string;
+          available_stock: number;
+          reserved_stock: number;
+          low_stock_threshold: number | null;
+        }>(
+          "SELECT id, available_stock, reserved_stock, low_stock_threshold FROM merchant_inventory WHERE merchant_id = $1 AND product_id = $2 FOR UPDATE",
           [item.merchantId, item.productId],
         );
         const inventory = rows[0];
@@ -97,6 +114,17 @@ export class InventoryReservationService {
           `UPDATE merchant_inventory SET ${stockChange}, updated_at = NOW() WHERE id = $1 AND ${stockGuard}`,
           [inventory.id, item.quantity],
         );
+
+        // Track the post-update level; the same product can appear more than
+        // once in a batch, so build on the previous level when it does.
+        const levelKey = `${item.merchantId}:${item.productId}`;
+        const before = levels.get(levelKey)?.availableStock ?? inventory.available_stock;
+        levels.set(levelKey, {
+          merchantId: item.merchantId,
+          productId: item.productId,
+          availableStock: operation === "reserve" ? before - item.quantity : before + item.quantity,
+          lowStockThreshold: inventory.low_stock_threshold ?? null,
+        });
 
         // Issue #342: record (or clear) the per-order reservation row. The
         // unique index on (merchant_id, order_id, product_id) is what makes
@@ -132,6 +160,12 @@ export class InventoryReservationService {
       client?.release();
       await lock.release();
     }
+
+    // Only reached after COMMIT. Decrements may cross a low-stock threshold;
+    // releases may lift stock back above it and re-arm the alert.
+    if (this.stockObserver && levels.size > 0) {
+      await this.stockObserver.onStockLevelsChanged([...levels.values()]).catch(() => undefined);
+    }
   }
 }
 
@@ -148,10 +182,31 @@ let reservationService: InventoryReservationService | undefined;
 
 export function getInventoryReservationService(): InventoryReservationService {
   if (!reservationService) {
-    const redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379", { lazyConnect: true });
+    const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
+    const redis = new Redis(redisUrl, { lazyConnect: true });
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+    let lowStockAlerts: LowStockAlertService | undefined;
+    if (process.env.ENABLE_LOW_STOCK_ALERTS !== "false") {
+      const url = new URL(redisUrl);
+      lowStockAlerts = new LowStockAlertService(
+        redis as unknown as DebounceRedis,
+        new PgProductDetailsLookup(pool),
+        new BullMqLowStockAlertPublisher(
+          createLowStockQueue({
+            host: url.hostname,
+            port: Number(url.port) || 6379,
+            password: url.password || undefined,
+          }),
+        ),
+        { debounceSeconds: Number(process.env.LOW_STOCK_ALERT_DEBOUNCE_SECONDS ?? 6 * 60 * 60) },
+      );
+    }
+
     reservationService = new InventoryReservationService(
-      new Pool({ connectionString: process.env.DATABASE_URL }),
+      pool,
       new Redlock([redis as never]) as unknown as ReservationLock,
+      lowStockAlerts,
     );
   }
   return reservationService;

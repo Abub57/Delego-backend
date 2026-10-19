@@ -17,6 +17,7 @@
     "@delegolabs/types": "workspace:*",
     "@delegolabs/utils": "workspace:*",
     "@sendgrid/mail": "^8.1.4",
+    "bullmq": "^5.78.1",
     "cron-parser": "^5.10.0",
     "ioredis": "^5.11.1",
     "jsonwebtoken": "^9.0.3",

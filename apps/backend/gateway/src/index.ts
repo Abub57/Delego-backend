@@ -22,6 +22,7 @@ import { registerGracefulShutdown } from "./shutdown.js";
 import { startMetricsSampling, adaptiveRateLimitingMiddleware } from "./rateLimit/adaptive.js";
 import { sequelize, initializeDbMetrics } from "./db.js";
 import { withSentryMiddleware, withSentryRoutes } from "./observability/sentryRequest.js";
+import { startBulkCatalogImportWorker } from "./catalog/bulkImport/queue.js";
 
 const SERVICE_NAME = "gateway";
 const DEFAULT_PORT = 3000;
@@ -57,6 +58,14 @@ const metricsRegistry = new ServiceMetricsRegistry();
 initializeDbMetrics(metricsRegistry);
 
 startMetricsSampling();
+
+// Bulk CSV catalog imports run in-process; disable on API-only replicas with
+// ENABLE_CATALOG_IMPORT_WORKER=false and run a dedicated worker deployment.
+const catalogImportWorker =
+  process.env.ENABLE_CATALOG_IMPORT_WORKER !== "false" ? startBulkCatalogImportWorker() : null;
+process.once("SIGTERM", () => {
+  void catalogImportWorker?.close();
+});
 
 const server = startHttpServer({
   port,

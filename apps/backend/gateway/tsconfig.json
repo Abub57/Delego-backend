@@ -17,7 +17,9 @@
     "middleware/**/*",
     "../lua-scripts/src/**/*",
     "../monitoring/src/**/*",
-    "../orchestrator/src/templates/**/*"
+    "../orchestrator/src/templates/**/*",
+    "../notifications/src/restock/queue.ts",
+    "../notifications/webhooks/ssrfGuard.ts"
   ],
   "exclude": [
     "**/*.test.ts",

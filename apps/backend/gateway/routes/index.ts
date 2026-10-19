@@ -116,6 +116,8 @@ import { registerDisputeRoutes } from "./disputes.js";
 import { searchProductsHandler, embeddingCacheMetricsHandler } from "../src/search/routes.js";
 import { registerMerchantRoutes } from "../src/merchant/routes.js";
 import { registerCatalogRoutes } from "../src/catalog/routes.js";
+import { registerWaitlistRoutes } from "../src/waitlist/routes.js";
+import { registerBulkCatalogImportRoutes } from "../src/catalog/bulkImport/routes.js";
 import { registerAgentChatRoutes } from "./agentChat.js";
 import { registerMetricsRoutes } from "../src/metrics.js";
 import {
@@ -292,6 +294,10 @@ export function registerRoutes(): Route[] {
     ...registerMerchantRoutes(),
     // Catalog - product CRUD with cursor pagination
     ...registerCatalogRoutes(),
+    // Restock waitlist subscriptions
+    ...registerWaitlistRoutes(),
+    // Bulk CSV catalog import jobs
+    ...registerBulkCatalogImportRoutes(),
     // Agent Chat - SSE streaming for agent conversations
     ...registerAgentChatRoutes(),
   ];
