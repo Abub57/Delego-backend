@@ -138,6 +138,20 @@ export async function ensureCdcSchema(pool: Pool): Promise<void> {
       ledger_sequence INTEGER NOT NULL,
       published_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    -- Resumable Soroban ingestion event store (see migration 046)
+    CREATE TABLE IF NOT EXISTS soroban_contract_events (
+      event_id VARCHAR(255) PRIMARY KEY,
+      contract_id VARCHAR(255) NOT NULL,
+      ledger_sequence INTEGER NOT NULL,
+      ledger_closed_at TIMESTAMPTZ NOT NULL,
+      tx_hash VARCHAR(64) NOT NULL,
+      topics JSONB NOT NULL DEFAULT '[]',
+      value JSONB NOT NULL DEFAULT '{}',
+      in_successful_contract_call BOOLEAN NOT NULL DEFAULT TRUE,
+      ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_soroban_contract_events_contract_ledger
+      ON soroban_contract_events (contract_id, ledger_sequence, event_id);
     CREATE TABLE IF NOT EXISTS cdc_replication_state (
       slot_name VARCHAR(255) PRIMARY KEY,
       confirmed_flush_lsn TEXT NOT NULL DEFAULT '0/0',

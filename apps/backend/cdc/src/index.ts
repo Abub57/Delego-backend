@@ -37,9 +37,24 @@ import { InMemoryPublishedEventStore, InMemoryReplicationStateStore } from "./st
 import { InMemorySchemaEvolutionStore } from "./schemaEvolution.js";
 import { createEscrowArchiver, startEscrowArchiveScheduler } from "./archiver/index.js";
 import {
-  createSorobanEventIngestionWorker,
-  type SorobanEventIngestionWorker,
+  InMemoryIngestionCheckpointStore,
+  PostgresIngestionCheckpointStore,
+  ResumableSorobanIngestionWorker,
+  SorobanLedgerRpcClient,
+  type LedgerEvent,
 } from "./sorobanEvents/index.js";
+
+/** Redis stream the Soroban events are fanned out to after commit. */
+const SOROBAN_EVENT_STREAM = "soroban:events";
+
+function optionalPositiveInt(raw: string | undefined, name: string): number | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer, got "${raw}"`);
+  }
+  return value;
+}
 
 const SERVICE_NAME = "cdc";
 const log = createLogger(SERVICE_NAME, process.env.LOG_LEVEL ?? "info");
@@ -144,7 +159,7 @@ async function main(): Promise<void> {
   // the CDC service stays backward-compatible for deployments that don't use
   // the Soroban event listener.
   // ---------------------------------------------------------------------------
-  let sorobanWorker: SorobanEventIngestionWorker | undefined;
+  let sorobanWorker: ResumableSorobanIngestionWorker | undefined;
 
   const sorobanRpcUrl = process.env.SOROBAN_RPC_URL;
   const sorobanContractIds = process.env.SOROBAN_CONTRACT_IDS
@@ -159,22 +174,49 @@ async function main(): Promise<void> {
 
     const sorobanRedis = new Redis(env.redisUrl ?? "redis://localhost:6379");
 
-    sorobanWorker = createSorobanEventIngestionWorker(
-      sorobanRedis,
+    // Events, exactly-once claims and the ledger watermark commit together in
+    // PostgreSQL; the Redis stream is an at-least-once fan-out after commit
+    // (consumers dedupe on eventId).
+    const publishToStream = async (_contractId: string, events: LedgerEvent[]): Promise<void> => {
+      const pipeline = sorobanRedis.pipeline();
+      for (const event of events) {
+        pipeline.xadd(
+          SOROBAN_EVENT_STREAM,
+          "*",
+          "eventId", event.eventId,
+          "contractId", event.contractId,
+          // `topic` keeps the field shape consumers of the legacy worker read.
+          "topic", String(event.topics[0] ?? "unknown"),
+          "topics", JSON.stringify(event.topics),
+          "data", JSON.stringify(event.value),
+          "ledger", String(event.ledger),
+          "txHash", event.txHash,
+          "timestamp", event.ledgerClosedAt
+        );
+      }
+      await pipeline.exec();
+    };
+
+    sorobanWorker = new ResumableSorobanIngestionWorker(
       {
-        rpcUrl: sorobanRpcUrl,
-        contractIds: sorobanContractIds,
-        pollIntervalMs: Number(process.env.SOROBAN_POLL_INTERVAL_MS ?? 5000),
-        pageSize: Number(process.env.SOROBAN_PAGE_SIZE ?? 50),
+        rpc: new SorobanLedgerRpcClient(sorobanRpcUrl),
+        store: useMemory
+          ? new InMemoryIngestionCheckpointStore()
+          : new PostgresIngestionCheckpointStore(pool),
+        onCommitted: publishToStream,
+        logger: log,
       },
       {
-        // Wire PostgreSQL stores in production; in-memory in test/local.
-        pgPool: useMemory ? undefined : pool,
-        logger: log,
+        contractIds: sorobanContractIds,
+        initialLedger: optionalPositiveInt(process.env.SOROBAN_INITIAL_LEDGER, "SOROBAN_INITIAL_LEDGER"),
+        windowSize: optionalPositiveInt(process.env.SOROBAN_LEDGER_WINDOW_SIZE, "SOROBAN_LEDGER_WINDOW_SIZE"),
+        pageSize: optionalPositiveInt(process.env.SOROBAN_PAGE_SIZE, "SOROBAN_PAGE_SIZE"),
+        pollIntervalMs: optionalPositiveInt(process.env.SOROBAN_POLL_INTERVAL_MS, "SOROBAN_POLL_INTERVAL_MS"),
       }
     );
 
-    // start() runs the startup backfill then begins the live polling loop.
+    // start() reads soroban_event_sync_checkpoints, then resumes each contract
+    // at lastProcessedLedger + 1.
     sorobanWorker.start().catch((err: unknown) => {
       log.error("Soroban event listener failed to start", {
         error: err instanceof Error ? err.message : String(err),
@@ -197,7 +239,7 @@ async function main(): Promise<void> {
         });
       }
     }
-    sorobanWorker?.stop();
+    await sorobanWorker?.stop();
     await pipeline?.stop();
     await connector.close();
     await pool.end();

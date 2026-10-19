@@ -40,6 +40,8 @@ import { registerDLQAdminRoutes } from "./batching/dlqAdminRoutes.js";
 import { registerAssetRoutes } from "./assets/routes.js";
 import { registerFaucetRoutes } from "./faucet/routes.js";
 import { registerFeeEstimatorRoutes } from "./feeEstimator/routes.js";
+import { registerMerchantDomainRoutes } from "./merchantDomain/routes.js";
+import { registerPathQuoteRoutes } from "./pathPayments/quoteProxy/routes.js";
 
 const log = createLogger("wallet:routes", process.env.LOG_LEVEL ?? "info");
 
@@ -933,5 +935,11 @@ export function registerRoutes(
 
     // --- Issue #364: Dynamic fee estimator routes ---
     ...registerFeeEstimatorRoutes(),
+
+    // --- SEP-1 merchant domain verification ---
+    ...registerMerchantDomainRoutes(),
+
+    // --- Oracle-signed path payment quotes (Horizon strict-receive) ---
+    ...registerPathQuoteRoutes(),
   ];
 }
