@@ -85,6 +85,45 @@ export interface UpdateProductPayload {
   metadata?: Record<string, unknown>;
 }
 
+export interface CreateProductVariantPayload {
+  sku: string;
+  attributes: Record<string, unknown>;
+  priceStroops: string;
+  stockCount?: number;
+  barcode?: string;
+}
+
+export interface UpdateProductVariantStockPayload {
+  delta: number; // Atomic delta: positive to add, negative to subtract
+}
+
+export interface ReviewSubmissionPayload {
+  orderId: string;
+  rating: number;
+  title: string;
+  content: string;
+  escrowContractId: string;
+  buyerSignature: string;
+}
+
+export interface ReviewAppealRequest {
+  reviewId: string;
+  reasonCategory: "spam" | "abusive" | "unrelated" | "fraudulent";
+  justification: string;
+  evidenceUrls: string[];
+}
+
+export interface ReviewModerationPayload {
+  status: "approved" | "rejected";
+  moderatorNotes?: string;
+}
+
+export interface DeliveryEvidencePayload {
+  fileName: string;
+  mimeType: string;
+  fileSizeBytes: number;
+}
+
 export interface AgentChatPayload {
   messages: Array<{ role: string; content: string }>;
   delegationId?: string;
@@ -274,3 +313,77 @@ export function validateSchema(schema: any, data: unknown): { valid: boolean; er
     return { valid: false, errors };
   }
 }
+export const CreateProductVariantSchema: any = {
+  type: "object",
+  properties: {
+    sku: { type: "string", minLength: 1, maxLength: 64 },
+    attributes: { type: "object" },
+    priceStroops: { type: "string", pattern: "^[1-9][0-9]*$" },
+    stockCount: { type: "integer", minimum: 0 },
+    barcode: { type: "string", maxLength: 64 },
+  },
+  required: ["sku", "attributes", "priceStroops"],
+  additionalProperties: false,
+};
+
+export const UpdateProductVariantStockSchema: any = {
+  type: "object",
+  properties: {
+    delta: { type: "integer" },
+  },
+  required: ["delta"],
+  additionalProperties: false,
+};
+
+export const ReviewSubmissionSchema: any = {
+  type: "object",
+  properties: {
+    orderId: { type: "string", minLength: 1, maxLength: 128 },
+    rating: { type: "integer", minimum: 1, maximum: 5 },
+    title: { type: "string", minLength: 1, maxLength: 255 },
+    content: { type: "string", minLength: 1 },
+    escrowContractId: { type: "string", minLength: 1, maxLength: 64 },
+    buyerSignature: { type: "string", minLength: 1, maxLength: 256 },
+  },
+  required: ["orderId", "rating", "title", "content", "escrowContractId", "buyerSignature"],
+  additionalProperties: false,
+};
+
+export const ReviewAppealSchema: any = {
+  type: "object",
+  properties: {
+    reviewId: { type: "string", format: "uuid" },
+    reasonCategory: { type: "string", enum: ["spam", "abusive", "unrelated", "fraudulent"] },
+    justification: { type: "string", minLength: 1, maxLength: 5000 },
+    evidenceUrls: {
+      type: "array",
+      items: { type: "string", format: "uri" },
+      minItems: 1,
+      maxItems: 10,
+    },
+  },
+  required: ["reviewId", "reasonCategory", "justification", "evidenceUrls"],
+  additionalProperties: false,
+};
+
+export const ReviewModerationSchema: any = {
+  type: "object",
+  properties: {
+    status: { type: "string", enum: ["approved", "rejected"] },
+    moderatorNotes: { type: "string", maxLength: 5000 },
+  },
+  required: ["status"],
+  additionalProperties: false,
+  minProperties: 1,
+};
+
+export const DeliveryEvidenceSchema: any = {
+  type: "object",
+  properties: {
+    fileName: { type: "string", minLength: 1, maxLength: 255 },
+    mimeType: { type: "string", minLength: 1, maxLength: 64 },
+    fileSizeBytes: { type: "integer", minimum: 1, maximum: 10485760 }, // 10MB max
+  },
+  required: ["fileName", "mimeType", "fileSizeBytes"],
+  additionalProperties: false,
+};

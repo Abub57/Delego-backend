@@ -116,6 +116,9 @@ import { registerDisputeRoutes } from "./disputes.js";
 import { searchProductsHandler, embeddingCacheMetricsHandler } from "../src/search/routes.js";
 import { registerMerchantRoutes } from "../src/merchant/routes.js";
 import { registerCatalogRoutes } from "../src/catalog/routes.js";
+import { registerVariantRoutes } from "../src/catalog/variants.js";
+import { registerReviewRoutes } from "../src/catalog/reviews.js";
+import { registerDeliveryEvidenceRoutes } from "../src/catalog/deliveryEvidence.js";
 import { registerAgentChatRoutes } from "./agentChat.js";
 import { registerMetricsRoutes } from "../src/metrics.js";
 import {
@@ -292,6 +295,12 @@ export function registerRoutes(): Route[] {
     ...registerMerchantRoutes(),
     // Catalog - product CRUD with cursor pagination
     ...registerCatalogRoutes(),
+    // Product variants - variable products (sizes, colors, materials)
+    ...registerVariantRoutes(),
+    // Reviews with buyer verification
+    ...registerReviewRoutes(),
+    // Delivery evidence with IPFS/Arweave upload
+    ...registerDeliveryEvidenceRoutes(),
     // Agent Chat - SSE streaming for agent conversations
     ...registerAgentChatRoutes(),
   ];
