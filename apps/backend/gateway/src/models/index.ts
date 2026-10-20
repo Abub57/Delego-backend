@@ -8,6 +8,13 @@ import { RefreshToken } from "./RefreshToken.js";
 import { OAuthAccount } from "./OAuthAccount.js";
 import { PasskeyCredential } from "./PasskeyCredential.js";
 import { PasskeyChallenge } from "./PasskeyChallenge.js";
+import { Product } from "./Product.js";
+import { ProductVariant } from "./ProductVariant.js";
+import { Review } from "./Review.js";
+import { ReviewAppeal } from "./ReviewAppeal.js";
+import { DeliveryEvidence } from "./DeliveryEvidence.js";
+import { PaymentRecord } from "./PaymentRecord.js";
+import { Merchant } from "./Merchant.js";
 
 // User <-> Wallet (One-to-Many)
 User.hasMany(Wallet, { foreignKey: "userId", as: "wallets" });
@@ -57,6 +64,26 @@ Merchant.belongsTo(User, { foreignKey: "ownerUserId", as: "owner" });
 Merchant.hasMany(Product, { foreignKey: "merchantId", as: "products" });
 Product.belongsTo(Merchant, { foreignKey: "merchantId", as: "merchant" });
 
+// Product <-> ProductVariant (One-to-Many)
+Product.hasMany(ProductVariant, { foreignKey: "productId", as: "variants" });
+ProductVariant.belongsTo(Product, { foreignKey: "productId", as: "product" });
+
+// Product <-> Review (One-to-Many)
+Product.hasMany(Review, { foreignKey: "productId", as: "reviews" });
+Review.belongsTo(Product, { foreignKey: "productId", as: "product" });
+
+// Review <-> ReviewAppeal (One-to-One)
+Review.hasOne(ReviewAppeal, { foreignKey: "reviewId", as: "appeal" });
+ReviewAppeal.belongsTo(Review, { foreignKey: "reviewId", as: "review" });
+
+// Merchant <-> ReviewAppeal (One-to-Many)
+Merchant.hasMany(ReviewAppeal, { foreignKey: "merchantId", as: "appeals" });
+ReviewAppeal.belongsTo(Merchant, { foreignKey: "merchantId", as: "merchant" });
+
+// PaymentRecord associations (for review buyer verification)
+PaymentRecord.hasMany(Review, { foreignKey: "orderId", targetKey: "orderId", as: "reviews" });
+Review.belongsTo(PaymentRecord, { foreignKey: "orderId", targetKey: "orderId", as: "payment" });
+
 export {
   User,
   Wallet,
@@ -68,4 +95,11 @@ export {
   OAuthAccount,
   PasskeyCredential,
   PasskeyChallenge,
+  Product,
+  ProductVariant,
+  Review,
+  ReviewAppeal,
+  DeliveryEvidence,
+  PaymentRecord,
+  Merchant,
 };
