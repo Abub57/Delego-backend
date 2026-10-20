@@ -28,3 +28,36 @@ export {
   InMemoryProcessedEventStore,
   PostgresProcessedEventStore,
 } from "./checkpointStore.js";
+
+// Resumable, ledger-windowed ingestion with atomic watermarks.
+export {
+  ResumableSorobanIngestionWorker,
+  SorobanLedgerRpcClient,
+  SorobanRpcError,
+  LedgerRetentionGapError,
+  toLedgerEvent,
+} from "./resumableIngestion.js";
+export type {
+  RpcContractEvent,
+  SorobanLedgerRpc,
+  LedgerRange,
+  GetEventsWindowParams,
+  GetEventsWindowResult,
+  ResumableIngestionConfig,
+  ResumableIngestionDeps,
+  ContractSyncStatus,
+} from "./resumableIngestion.js";
+export {
+  PostgresIngestionCheckpointStore,
+  InMemoryIngestionCheckpointStore,
+  CheckpointConflictError,
+  compareLedgerEvents,
+} from "./ingestionCheckpointStore.js";
+export type {
+  IngestionCheckpoint,
+  IngestionCheckpointStore,
+  LedgerEvent,
+  LedgerEventProcessor,
+  CommitBatchInput,
+  CommitBatchResult,
+} from "./ingestionCheckpointStore.js";

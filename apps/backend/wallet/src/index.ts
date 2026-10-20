@@ -45,6 +45,7 @@ import { initSimulationCache } from "./simulationCache.js";
 import { initDLQ } from "./queue/transactionDLQ.js";
 import { getRedisConnection } from "./queue/txQueue.js";
 import { balanceTracker } from "./assets/balances.js";
+import { closePathQuoteService } from "./pathPayments/quoteProxy/routes.js";
 
 const server = startHttpServer({
   port,
@@ -110,6 +111,22 @@ try {
   log.error("Failed to start dynamic fee estimator", { error: (err as Error).message });
 }
 
+// SEP-1: daily re-verification of merchant domains (detects revoked listings)
+let domainReverificationCron: import("./merchantDomain/index.js").CronHandle | null = null;
+try {
+  const { getDomainValidationService, redisDailyLock, startDomainReverificationCron } = await import(
+    "./merchantDomain/index.js"
+  );
+  const domainService = getDomainValidationService();
+  domainReverificationCron = startDomainReverificationCron({
+    run: () => domainService.reverifyAll(),
+    hourUtc: Number(process.env.MERCHANT_DOMAIN_REVERIFY_HOUR_UTC ?? 3),
+    lock: redisDailyLock(getRedisConnection() as unknown as import("./merchantDomain/index.js").RedisSetNx),
+  });
+} catch (err) {
+  log.error("Failed to start merchant domain re-verification cron", { error: (err as Error).message });
+}
+
 // ─── Graceful Shutdown ─────────────────────────────────────────────────────
 
 async function gracefulShutdown(signal: NodeJS.Signals): Promise<void> {
@@ -137,6 +154,9 @@ async function gracefulShutdown(signal: NodeJS.Signals): Promise<void> {
   } catch (err) {
     log.error("Error stopping dynamic fee estimator", { error: (err as Error).message });
   }
+
+  domainReverificationCron?.stop();
+  closePathQuoteService();
 
   // Drain batch flush timers
   try {

@@ -1,5 +1,6 @@
 import { route, type Route } from "@delegolabs/utils";
 import { getSpendSummaryHandler } from "./spendSummary.js";
+import { getMerchantRevenueHandler } from "./merchantRevenue.js";
 import {
   getFunnelMetricsHandler,
   getEngagementMetricsHandler,
@@ -46,6 +47,9 @@ export function registerAnalyticsRoutes(): Route[] {
 
     // Real-Time Merchant Continuous Aggregates (#377)
     route("GET", "/api/v1/analytics/merchants/:merchantId/sales", getMerchantSalesHandler),
+
+    // Merchant revenue reports: settled volume, fees and refunds by day/week/month
+    route("GET", "/api/v1/merchant/analytics/revenue", getMerchantRevenueHandler),
 
     // Data export
     // Issue #395: memory-efficient chunked CSV streaming of transaction history.
