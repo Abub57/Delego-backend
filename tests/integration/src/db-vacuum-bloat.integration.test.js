@@ -72,6 +72,18 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
 
   const table = `${SCHEMA}_orders`;
 
+  /**
+   * Autovacuum would otherwise reclaim the churn before the assertions can
+   * observe it: n_dead_tup drops back to zero and the test fails with
+   * "expected the collector to report dead tuples". The fixture opts out
+   * while it is being drifted and opts back in afterwards.
+   */
+  async function setAutovacuum(enabled) {
+    await client.query(
+      `ALTER TABLE "${SCHEMA}"."${table}" SET (autovacuum_enabled = ${enabled ? "true" : "false"})`,
+    );
+  }
+
   before(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
     const assessment = await import(
@@ -97,6 +109,7 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
     await client.query(
       `CREATE TABLE "${SCHEMA}"."${table}" (id BIGSERIAL PRIMARY KEY, payload TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
     );
+    await setAutovacuum(true);
   });
 
   after(async () => {
@@ -109,21 +122,29 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
 
   /** Churns the table so that most of its rows are dead. */
   async function churnTable({ live = 50, dead = 20_000 } = {}) {
-    await client.query(
-      `INSERT INTO "${SCHEMA}"."${table}" (payload)
-       SELECT md5(g::text) FROM generate_series(1, $1) g`,
-      [live + dead],
-    );
-    // A plain INSERT ... SELECT returns no rows, so the high-water mark is
-    // resolved from the table itself rather than from the (empty) result set.
-    await client.query(
-      `DELETE FROM "${SCHEMA}"."${table}"
-       WHERE id <= (SELECT max(id) FROM "${SCHEMA}"."${table}") - $1`,
-      [live],
-    );
-    // ANALYZE refreshes the planner statistics; n_dead_tup itself comes from
-    // the stats collector, which we poll for below.
-    await client.query(`ANALYZE "${SCHEMA}"."${table}"`);
+    // The churn is only observable while it exists: autovacuum (or a
+    // threshold-triggered worker) reclaiming it between the DML and the
+    // assertion is exactly what made this test flaky on CI.
+    await setAutovacuum(false);
+    try {
+      await client.query(
+        `INSERT INTO "${SCHEMA}"."${table}" (payload)
+         SELECT md5(g::text) FROM generate_series(1, $1) g`,
+        [live + dead],
+      );
+      // A plain INSERT ... SELECT returns no rows, so the high-water mark is
+      // resolved from the table itself rather than from the (empty) result set.
+      await client.query(
+        `DELETE FROM "${SCHEMA}"."${table}"
+         WHERE id <= (SELECT max(id) FROM "${SCHEMA}"."${table}") - $1`,
+        [live],
+      );
+      // ANALYZE refreshes the planner statistics; n_dead_tup itself comes from
+      // the stats collector, which we poll for below.
+      await client.query(`ANALYZE "${SCHEMA}"."${table}"`);
+    } finally {
+      await setAutovacuum(true);
+    }
   }
 
   /**
@@ -170,7 +191,7 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
         (s) => s.schemaname === SCHEMA && s.relname === table,
       );
       return found && found.n_dead_tup > 0 ? found : null;
-    });
+    }, { timeoutMs: 30_000, intervalMs: 200 });
 
     assert.ok(stats, "expected the collector to report dead tuples");
     assert.ok(stats.n_dead_tup > stats.n_live_tup);
