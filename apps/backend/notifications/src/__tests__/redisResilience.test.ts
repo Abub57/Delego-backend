@@ -5,11 +5,14 @@
  * connection state logging, and in-memory fallback queue.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { EventEmitter } from "events";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 
-// Mock ioredis before importing the client module
-vi.mock("ioredis", () => {
+// Mock ioredis before importing the client module.
+// The factory must not close over module-scope imports: `vi.mock` is hoisted
+// above them, so referencing `EventEmitter` here would hit the deferred
+// `__vi_import_*` binding before it is initialized. Import it inside instead.
+vi.mock("ioredis", async () => {
+  const { EventEmitter } = await import("events");
   class MockRedis extends EventEmitter {
     constructor(public url: string, public options?: any) {
       super();
@@ -19,12 +22,14 @@ vi.mock("ioredis", () => {
     async connect() {
       // Simulate connection delay
       await new Promise(resolve => setTimeout(resolve, 10));
+      this._isConnected = true;
       this.emit("connect");
       this.emit("ready");
       return this;
     }
 
     async quit() {
+      this._isConnected = false;
       this.emit("end");
       return "OK";
     }
@@ -93,6 +98,9 @@ vi.mock("ioredis", () => {
 // Set test environment
 process.env.NODE_ENV = "test";
 process.env.MOCK_REDIS = "true";
+// Opt into the mocked `ioredis` module above instead of the shared ioredis-mock
+// instance, so this suite can drive the connection lifecycle itself.
+process.env.REDIS_TEST_CLIENT = "injected";
 
 describe("Redis Resilience", () => {
   // Reset modules between tests to get fresh state
@@ -102,6 +110,12 @@ describe("Redis Resilience", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  // `process.env` is shared across test files that reuse the same worker, so the
+  // opt-in above must not outlive this suite.
+  afterAll(() => {
+    delete process.env.REDIS_TEST_CLIENT;
   });
 
   describe("Connection State Management", () => {
@@ -283,15 +297,19 @@ describe("Redis Resilience", () => {
     it("should allow manual buffer flush", async () => {
       const { getPublisherClient, publishNotification, manualFlushBuffer, getBufferMetrics } = await import("../redis/client.js");
       
-      // Buffer some notifications
+      const client = getPublisherClient() as any;
+      await client.connect();
+      
+      // The client reports ready but the socket is down, so each publish falls
+      // back to the in-memory buffer instead of being delivered.
+      client._isConnected = false;
       await publishNotification("test:channel", JSON.stringify({ test: "data1" }));
       await publishNotification("test:channel", JSON.stringify({ test: "data2" }));
       
       expect(getBufferMetrics().bufferSize).toBe(2);
       
-      // Connect and manually flush
-      const client = getPublisherClient() as any;
-      await client.connect();
+      // Once the socket recovers a manual flush drains the buffer.
+      client._isConnected = true;
       
       const result = await manualFlushBuffer();
       expect(result.flushed).toBe(2);

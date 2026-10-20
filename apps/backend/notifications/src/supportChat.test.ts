@@ -59,10 +59,12 @@ function makePayload(overrides: Partial<EncryptedMessagePayload> = {}): Encrypte
 function makeFakeWs(): {
   ws: WebSocket;
   sent: Array<Record<string, unknown>>;
-  closed: { code?: number; reason?: string } | null;
+  closed: { code?: number; reason?: string };
 } {
   const sent: Array<Record<string, unknown>> = [];
-  let closed: { code?: number; reason?: string } | null = null;
+  // A stable object that `close()` mutates: returning a snapshot would leave
+  // the caller holding the pre-close value forever.
+  const closed: { code?: number; reason?: string } = {};
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
   const ws = {
@@ -71,7 +73,8 @@ function makeFakeWs(): {
       sent.push(JSON.parse(raw) as Record<string, unknown>);
     }),
     close: vi.fn((code?: number, reason?: string) => {
-      closed = { code, reason };
+      closed.code = code;
+      closed.reason = reason;
       (ws as unknown as { readyState: number }).readyState = WebSocket.CLOSED;
       for (const cb of listeners.get("close") ?? []) cb();
     }),
