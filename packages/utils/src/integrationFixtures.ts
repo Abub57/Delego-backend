@@ -100,10 +100,10 @@ export class TestFixtureFactory {
             {
               productId: "prod_1",
               quantity: 1,
-              unitPriceStroops: 50000000n,
+              unitPriceStroops: "50000000",
             },
           ],
-          totalStroops: overrides?.totalStroops ?? 50000000n,
+          totalStroops: overrides?.totalStroops ?? "50000000",
           escrowContractId: overrides?.escrowContractId ?? null,
           createdAt: overrides?.createdAt ?? new Date(),
           updatedAt: overrides?.updatedAt ?? new Date(),
