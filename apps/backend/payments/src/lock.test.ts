@@ -14,6 +14,7 @@ describe("Escrow Funding Lock Mechanisms", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     _resetLockRedisClient();
   });
 
@@ -59,14 +60,19 @@ describe("Escrow Funding Lock Mechanisms", () => {
     const orderId = "order-test-004";
     const shortTtl = 50; // 50ms TTL
 
+    // Drive the TTL with the fake clock: on a slow, oversubscribed CI runner
+    // a real-time stall between the two acquires would let the 50ms TTL lapse
+    // and make the "still blocked" assertion flake.
+    vi.useFakeTimers();
+
     const acquired = await acquireLock(orderId, shortTtl);
     expect(acquired).toBe(true);
 
     // Immediately secondary attempt is blocked
     expect(await acquireLock(orderId, shortTtl)).toBe(false);
 
-    // Wait for TTL to expire
-    await new Promise((res) => setTimeout(res, 60));
+    // Advance the mocked clock past the TTL instead of sleeping in real time
+    await vi.advanceTimersByTimeAsync(shortTtl + 1);
 
     // After TTL expires, acquireLock should succeed again
     const afterExpiryAcquire = await acquireLock(orderId, shortTtl);
