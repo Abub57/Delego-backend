@@ -139,6 +139,11 @@ export async function printEncryptionBenchmark(options: BenchmarkOptions = {}): 
 }
 
 // Run directly: `pnpm --filter @delegolabs/utils ts-benchmark:encryption`
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await printEncryptionBenchmark();
+const entrypoint = process.argv[1];
+if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
+  void printEncryptionBenchmark().catch((error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error(error);
+    process.exitCode = 1;
+  });
 }
