@@ -36,7 +36,10 @@ if (dbAvailable && !serviceBuilt) {
 
 const suite = dbAvailable && serviceBuilt ? describe : describe.skip;
 
-const SCHEMA = uniqueId("vacuum_it");
+// `uniqueId` separates its parts with hyphens, which the vacuum executor's
+// identifier validator (IDENTIFIER_PATTERN) rejects, so the suffix is
+// normalized to a valid unquoted identifier.
+const SCHEMA = uniqueId("vacuum_it").replace(/-/g, "_");
 
 /**
  * Polls until `check` returns a truthy value. The statistics collector writes

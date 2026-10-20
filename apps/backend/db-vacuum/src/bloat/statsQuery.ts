@@ -90,14 +90,12 @@ export function buildBloatStatsQuery(options: StatsQueryOptions = {}): {
             json_build_object(
               'indexname', ix.indexrelname,
               'indexSizeBytes', pg_relation_size(ix.indexrelid),
-              'idxScan', COALESCE(st.idx_scan, 0),
-              'idxTupRead', COALESCE(st.idx_tup_read, 0)
+              'idxScan', COALESCE(ix.idx_scan, 0),
+              'idxTupRead', COALESCE(ix.idx_tup_read, 0)
             )
           )
           FROM pg_stat_user_indexes ix
           JOIN pg_index i ON i.indexrelid = ix.indexrelid
-          LEFT JOIN pg_statio_user_indexes st
-            ON st.indexrelid = ix.indexrelid AND st.schemaname = ix.schemaname AND st.relname = ix.relname
           WHERE ix.relid = s.relid
         ),
         '[]'::json
