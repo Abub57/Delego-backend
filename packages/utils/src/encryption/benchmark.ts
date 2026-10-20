@@ -139,6 +139,12 @@ export async function printEncryptionBenchmark(options: BenchmarkOptions = {}): 
 }
 
 // Run directly: `pnpm --filter @delegolabs/utils ts-benchmark:encryption`
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await printEncryptionBenchmark();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // Deliberately not top-level `await`: that marks this whole ESM graph async,
+  // which makes `require("@delegolabs/utils")` fail in CommonJS consumers.
+  printEncryptionBenchmark().catch((error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

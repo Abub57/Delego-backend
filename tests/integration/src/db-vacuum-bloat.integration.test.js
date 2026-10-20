@@ -71,7 +71,6 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
 
   before(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
-    const bloat = await import("../../../apps/backend/db-vacuum/dist/src/bloat/statsQuery.js");
     const assessment = await import(
       "../../../apps/backend/db-vacuum/dist/src/bloat/assessment.js"
     );
@@ -82,10 +81,9 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
       "../../../apps/backend/db-vacuum/dist/src/store/vacuumHistoryStore.js"
     );
 
-    ({ PgBloatScanner } = bloat);
+    ({ PgBloatScanner, DatabaseVacuumService } = service);
     ({ assessTables } = assessment);
     ({ PgVacuumExecutor, RecordingVacuumExecutor, buildVacuumStatement } = executor);
-    ({ DatabaseVacuumService } = service);
     ({ DeduplicatingAlertRouter, RecordingAlertSink } = alerts);
     ({ InMemoryVacuumHistoryStore } = history);
 
@@ -108,14 +106,17 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
 
   /** Churns the table so that most of its rows are dead. */
   async function churnTable({ live = 50, dead = 20_000 } = {}) {
-    const { rows } = await client.query(
+    await client.query(
       `INSERT INTO "${SCHEMA}"."${table}" (payload)
        SELECT md5(g::text) FROM generate_series(1, $1) g`,
       [live + dead],
     );
+    // A plain INSERT ... SELECT returns no rows, so the high-water mark is
+    // resolved from the table itself rather than from the (empty) result set.
     await client.query(
-      `DELETE FROM "${SCHEMA}"."${table}" WHERE id <= $1`,
-      [rows[0].id - live],
+      `DELETE FROM "${SCHEMA}"."${table}"
+       WHERE id <= (SELECT max(id) FROM "${SCHEMA}"."${table}") - $1`,
+      [live],
     );
     // ANALYZE refreshes the planner statistics; n_dead_tup itself comes from
     // the stats collector, which we poll for below.
