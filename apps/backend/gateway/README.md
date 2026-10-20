@@ -171,3 +171,28 @@ Oversized bodies receive HTTP **413** with the standard error envelope:
 ```
 
 The limit is checked via `Content-Length` when present and by streaming byte count otherwise. Invalid limit strings fall back to `100kb`.
+
+## Courier Webhooks
+
+`POST /api/v1/courier/webhooks/:carrier` (`fedex`, `ups` or `dhl`) verifies the
+carrier signature, normalizes the event and publishes it to the Redis stream
+`events:shipment:status`.
+
+- **Signature:** HMAC-SHA256 of the raw request body, hex encoded (an optional
+  `sha256=` prefix is accepted), in `X-FedEx-Signature`, `X-UPS-Signature` or
+  `X-DHL-Signature`.
+- **Secrets:** `FEDEX_WEBHOOK_SECRET`, `UPS_WEBHOOK_SECRET`, `DHL_WEBHOOK_SECRET`.
+  A carrier with no secret configured is rejected with 401.
+- **Responses:** 200 accepted, 400 invalid payload, 401 bad or missing signature,
+  404 unsupported carrier, 413 body over 100 KiB, 503 stream publish failed
+  (the carrier should retry).
+- **Rate limiting:** callers without a user token fall in the `free` tier, keyed by IP (burst 10, 60 per minute), so a burst of retries from one carrier IP can get 429. Carriers retry on 429.
+- **Raw body capture:** `courierWebhookBodyCapture()` must stay before
+  `bodyLimitMiddleware()` in `src/index.ts`. Later middleware drains the request
+  stream, and the HMAC needs the exact bytes the carrier sent.
+- **Not in the OpenAPI spec on purpose:** request validation reads the body, and
+  the capture middleware has already consumed the stream, so a documented route
+  could hang. If it is ever documented, add `/api/v1/courier/webhooks` to
+  `EXCLUDED_PATHS` in `src/middleware/validateRequest.ts` and to `skipPaths` of
+  `openApiValidationMiddleware` (a custom list replaces the default
+  `["/health"]`, so keep `/health`).
