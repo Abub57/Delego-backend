@@ -199,3 +199,57 @@ describe("ToolRegistry.execute — unknown tool", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #533 — pre-execution spend-velocity guard
+// ---------------------------------------------------------------------------
+
+describe("ToolRegistry.execute — pre-execution guard", () => {
+  it("runs the guard before executing the tool", async () => {
+    const calls: string[] = [];
+    const registry = new ToolRegistry(
+      undefined,
+      undefined,
+      (toolName) => {
+        calls.push(`guard:${toolName}`);
+      }
+    );
+    registry.register(makeEchoTool("read_only"));
+
+    await registry.execute("echo", { msg: "ok" }, READ_CONTEXT);
+    expect(calls).toEqual(["guard:echo"]);
+  });
+
+  it("aborts execution when the guard throws", async () => {
+    const execute = vi.fn(async () => "should-not-run");
+    const tool: AgentTool<{ msg: string }, string> = {
+      name: "pay",
+      description: "pays",
+      inputSchema: z.object({ msg: z.string() }),
+      requiredPermission: "read_only",
+      execute,
+    };
+    const registry = new ToolRegistry(undefined, undefined, () => {
+      throw new Error("Spend velocity exceeded");
+    });
+    registry.register(tool);
+
+    await expect(
+      registry.execute("pay", { msg: "ok" }, READ_CONTEXT)
+    ).rejects.toThrow("Spend velocity exceeded");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("records the guard failure in the audit log", async () => {
+    const registry = new ToolRegistry(undefined, undefined, () => {
+      throw new Error("velocity");
+    });
+    registry.register(makeEchoTool("read_only"));
+
+    await expect(registry.execute("echo", { msg: "ok" }, READ_CONTEXT)).rejects.toThrow();
+    const log = registry.getAuditLog();
+    expect(log).toHaveLength(1);
+    expect(log[0].success).toBe(false);
+    expect(log[0].error).toMatch(/velocity/);
+  });
+});

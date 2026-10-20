@@ -9,6 +9,7 @@ export type {
   AgentPermissionScope,
   ToolAuditEntry,
   AuditLogger,
+  PreExecutionGuard,
 } from "./registry.js";
 
 export {
@@ -34,3 +35,16 @@ export type {
   ToolCallSanitizationResult,
   SanitizationOptions,
 } from "./sanitization.js";
+
+// Issue #533: spend-velocity guard for money-moving tool execution
+export {
+  SpendVelocityGuard,
+  SpendVelocityExceededError,
+  guardSpend,
+} from "./spendVelocityGuard.js";
+export type {
+  SpendVelocityPolicy,
+  SpendVelocityCheckResult,
+  RecordedSpend,
+  VelocityAlert,
+} from "./spendVelocityGuard.js";

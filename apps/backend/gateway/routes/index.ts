@@ -121,6 +121,7 @@ import { registerReviewRoutes } from "../src/catalog/reviews.js";
 import { registerDeliveryEvidenceRoutes } from "../src/catalog/deliveryEvidence.js";
 import { registerAgentChatRoutes } from "./agentChat.js";
 import { registerMetricsRoutes } from "../src/metrics.js";
+import { registerOracleRateRoutes } from "../src/oracle/routes.js";
 import {
   dbSlaStatusHandler,
   dbSlowQueriesHandler,
@@ -258,6 +259,8 @@ export function registerRoutes(): Route[] {
     route("GET", "/api/v1/search/embedding-cache/metrics", embeddingCacheMetricsHandler),
     // Issue #299 — Delivery Oracle Health Check & Heartbeat Monitor
     route("GET", "/health/oracle", oracleHealthHandler),
+    // Issue #528 — Fiat currency conversion oracle cache
+    ...registerOracleRateRoutes(),
     // Workflow template system
     route("GET", "/api/v1/templates/catalog", catalogHandler),
     route("GET", "/api/v1/templates/categories", categoriesHandler),

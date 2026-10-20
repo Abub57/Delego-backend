@@ -60,6 +60,7 @@ The incremental migrations are:
 | `039_user_agent_memories.sql` | Long-term user preference memory with pgvector embeddings and IVFFLAT index (#266) |
 | `040_passkey_credentials.sql` | WebAuthn passkey credentials (public key, signature counter, transports) and single-use ceremony challenges (#367) |
 | `043_spend_metrics.sql` | Daily/monthly completed escrow spend summaries with user/date covering indexes (#306); paired rollback drops both summaries |
+| `049_review_moderation_audit.sql` | Append-only audit trail for administrative review appeal verdicts (#520) |
 
 ### Passkey / WebAuthn configuration (#367)
 
