@@ -59,7 +59,10 @@ describe("WebSocketStallMonitor", () => {
     const onStalled = vi.fn();
     const monitor = new WebSocketStallMonitor(socket, { onStalled }, {
       heartbeatIntervalMs: 10_000,
-      readTimeoutMs: 30_000,
+      // Deliberately longer than maxConsecutiveMisses * heartbeatIntervalMs so
+      // the read deadline can't fire at the same instant: this test isolates
+      // the unanswered-heartbeat path.
+      readTimeoutMs: 60_000,
       reconnectBackoffMs: 1_000,
       maxConsecutiveMisses: 3,
     });

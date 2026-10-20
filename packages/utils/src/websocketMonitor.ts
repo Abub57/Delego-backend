@@ -96,7 +96,6 @@ export class WebSocketStallMonitor {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private readDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
   private consecutiveMisses = 0;
-  private awaitingPong = false;
   private stopped = false;
 
   constructor(
@@ -123,7 +122,6 @@ export class WebSocketStallMonitor {
   noteActivity(): void {
     if (this.stopped) return;
     this.consecutiveMisses = 0;
-    this.awaitingPong = false;
     this.armReadDeadline();
   }
 
@@ -145,20 +143,22 @@ export class WebSocketStallMonitor {
   private sendHeartbeat(): void {
     if (this.stopped) return;
 
-    if (this.awaitingPong) {
-      this.consecutiveMisses += 1;
-      if (this.consecutiveMisses >= this.config.maxConsecutiveMisses) {
-        this.declareStalled("max_misses_exceeded");
-        return;
-      }
-    }
+    // The heartbeat being sent is itself unanswered until traffic arrives
+    // (noteActivity() clears the counter), so it counts as a miss. Counting it
+    // — rather than only the heartbeats after the first — makes
+    // `maxConsecutiveMisses` unanswered heartbeats trip the stall at exactly
+    // maxConsecutiveMisses * heartbeatIntervalMs.
+    this.consecutiveMisses += 1;
 
-    this.awaitingPong = true;
     try {
       this.socket.ping();
     } catch {
       // A throw here means the socket is already dead — the read deadline
       // (or the next missed-pong count) will catch it; nothing else to do.
+    }
+
+    if (this.consecutiveMisses >= this.config.maxConsecutiveMisses) {
+      this.declareStalled("max_misses_exceeded");
     }
   }
 

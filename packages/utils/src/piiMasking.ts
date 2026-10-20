@@ -12,7 +12,9 @@
 
 export const PII_PATTERNS = {
   email: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-  phone: /\+?[1-9]\d{1,14}/g,
+  // Anchored to token boundaries: without them this also matched the digits
+  // inside identifiers such as "abc123" or "user_42", redacting non-PII.
+  phone: /(?<!\w)\+?[1-9]\d{1,14}(?!\w)/g,
   creditCard: /\b(?:\d[ -]*?){13,16}\b/g,
   // Stellar secret seeds: "S" followed by 55 base32 chars (56 chars total).
   stellarSecret: /S[A-Z0-9]{55}/g,
