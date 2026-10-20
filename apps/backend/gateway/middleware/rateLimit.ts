@@ -7,6 +7,10 @@ import { TenantRateLimiter } from "../src/rateLimit/tenantRateLimiter.js";
 import { extractAuth, getAuthenticatedUserContext } from "./auth.js";
 import type { RateLimitConfig as LegacyRateLimitConfig } from "../src/rateLimit/types.js";
 import { checkRateLimit as legacyCheckRateLimit } from "../src/rateLimit/rateLimiter.js";
+import { GlobalTokenBucket, RateLimitUnavailableError, resolveGlobalTier } from "../src/rateLimit/globalTokenBucket.js";
+import { getGlobalRateLimiter } from "../src/rateLimit/globalRedis.js";
+import { ENDPOINT_OVERRIDES } from "../src/rateLimit/tokenBucket/tierConfig.js";
+import { recordRateLimitOutcome } from "../src/rateLimit/tokenBucket/metrics.js";
 
 // ---------------------------------------------------------------------------
 // Trusted proxy resolution (Issue #354)
@@ -154,16 +158,18 @@ function getEndpoint(req: IncomingMessage): { method: string; path: string } {
 }
 
 export interface RateLimitMiddlewareOptions {
-  /** Injected tenant limiter (tests); defaults to a Redis-backed instance. */
+  /** Explicit legacy sliding-window adapter retained for existing integrations. */
   tenantLimiter?: TenantRateLimiter;
+  globalLimiter?: GlobalTokenBucket;
 }
 
 /**
  * Tiered rate limiting (Issue #309).
  *
- * Tenant tiers are enforced with a Redis sliding-window log maintained by
- * `TenantRateLimiter` — Free 60/min, Merchant 300/min, Enterprise 1200/min,
- * each with a burst allowance. Responses carry `X-RateLimit-Limit`,
+ * Global Redis token buckets admit Free 60, Verified 600 and Enterprise 3000
+ * tokens, replenished continuously over a minute without extra burst allowance.
+ * Sensitive auth routes retain their additional tighter sliding-window limits.
+ * Responses carry `X-RateLimit-Limit`,
  * `X-RateLimit-Remaining`, and (on HTTP 429) an exact `Retry-After` in
  * seconds. Internal service-to-service callers stay exempt, and the legacy
  * `{ maxRequests, windowMs }` override still uses the fixed-window limiter.
@@ -177,6 +183,7 @@ export function rateLimitMiddleware(
   options: RateLimitMiddlewareOptions = {}
 ) {
   let tenantLimiter = options.tenantLimiter;
+  let globalLimiter = options.globalLimiter;
   return async (
     req: IncomingMessage,
     res: ServerResponse,
@@ -224,9 +231,23 @@ export function rateLimitMiddleware(
         return;
       }
 
-      const tier = resolveTenantTier(getAuthenticatedUserContext(req)?.roles);
-      tenantLimiter ??= new TenantRateLimiter();
-      const decision = await tenantLimiter.check(identifier, tier, { endpoint: path, method });
+      let decision;
+      if (options.tenantLimiter) {
+        const tier = resolveTenantTier(getAuthenticatedUserContext(req)?.roles);
+        decision = await options.tenantLimiter.check(identifier, tier, { endpoint: path, method });
+      } else {
+        const context = getAuthenticatedUserContext(req);
+        globalLimiter ??= getGlobalRateLimiter();
+        decision = await globalLimiter.check(
+          `${context ? "user" : "ip"}:${identifier}`, resolveGlobalTier(context?.roles),
+        );
+        recordRateLimitOutcome(`${identifier}:global`, decision.allowed);
+        if (decision.allowed && ENDPOINT_OVERRIDES[`${method}:${path}`]) {
+          tenantLimiter ??= new TenantRateLimiter();
+          const sensitive = await tenantLimiter.check(identifier, "free", { endpoint: path, method });
+          if (!sensitive.allowed) decision = sensitive;
+        }
+      }
 
       for (const [name, value] of Object.entries(decision.headers)) {
         res.setHeader(name, value);
@@ -237,7 +258,7 @@ export function rateLimitMiddleware(
           data: null,
           error: {
             code: "RATE_LIMIT_EXCEEDED",
-            message: `Rate limit exceeded for tier "${decision.tier}". Please retry after ${decision.retryAfterSeconds} seconds.`,
+            message: `Rate limit exceeded for tier "${decision.tier}". Please retry after ${decision.headers["Retry-After"]} seconds.`,
           },
         });
         return;
@@ -245,6 +266,11 @@ export function rateLimitMiddleware(
 
       next();
     } catch (err) {
+      if (err instanceof RateLimitUnavailableError) {
+        res.setHeader("Retry-After", "1");
+        json(res, 503, { data: null, error: { code: "RATE_LIMIT_UNAVAILABLE", message: err.message } });
+        return;
+      }
       next(err);
     }
   };

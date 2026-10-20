@@ -1,0 +1,38 @@
+name: Global rate limit
+
+on:
+  pull_request:
+    paths:
+      - "apps/backend/gateway/**"
+      - "packages/utils/**"
+      - "packages/types/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/global-rate-limit.yml"
+
+jobs:
+  redis-concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      RATE_LIMIT_TEST_REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm --filter @delegolabs/types --filter @delegolabs/utils build
+      - run: pnpm --filter @delegolabs/gateway test -- src/rateLimit/globalTokenBucket.test.ts src/rateLimit/globalTokenBucket.redis.test.ts src/rateLimit/fastifyPlugin.test.ts

@@ -73,6 +73,8 @@ const server = startHttpServer({
     // Version negotiation must run before auth and rate-limiting so that
     // sunset versions get 410 Gone before any further processing.
     versionNegotiationMiddleware(),
+    // Consume the shared quota before parsing/validating request bodies.
+    rateLimitMiddleware(),
     bodyLimitMiddleware(),
     // OpenAPI request validation - validates path, query, and body parameters
     validateRequest(),
@@ -80,7 +82,6 @@ const server = startHttpServer({
       validateResponses: process.env.GATEWAY_VALIDATE_RESPONSES === "true",
     }),
     adaptiveRateLimitingMiddleware(),
-    rateLimitMiddleware(),
     // Deduplicates retried mutations (Issue #380): must wrap route handlers,
     // so it runs after auth/rate-limiting and before response capture points.
     idempotencyMiddleware(),
