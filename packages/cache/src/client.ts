@@ -34,6 +34,12 @@ import {
   RedisClusterFailoverClient,
   type ClusterNodeConnection,
 } from "./clusterFailover.js";
+import {
+  DEFAULT_SENTINEL_RECONNECT_CONFIG,
+  SentinelReconnectManager,
+  sentinelReconnectDelay,
+  type SentinelReconnectConfig,
+} from "./sentinelReconnect.js";
 import type { RedisClusterConfig, RedisNodeRole, SentinelNodeConfig } from "./types.js";
 
 const log = createLogger("cache:client", process.env.LOG_LEVEL ?? "info");
@@ -66,6 +72,58 @@ export function defaultRetryStrategy(times: number): number {
     return 2000;
   }
   return Math.min(times * 100, 2000);
+}
+
+function readPositiveNumber(
+  raw: string | undefined,
+  fallback: number,
+  name: string
+): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number`);
+  }
+  return value;
+}
+
+/**
+ * Backoff configuration for Sentinel failover reconnects (#563). The defaults
+ * are deliberately gentle: 100 ms base, 30 s cap, full jitter.
+ */
+export function sentinelReconnectConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env
+): SentinelReconnectConfig {
+  const baseMs = readPositiveNumber(
+    env.REDIS_SENTINEL_RECONNECT_BASE_MS,
+    DEFAULT_SENTINEL_RECONNECT_CONFIG.baseMs,
+    "REDIS_SENTINEL_RECONNECT_BASE_MS"
+  );
+  const maxMs = readPositiveNumber(
+    env.REDIS_SENTINEL_RECONNECT_MAX_MS,
+    DEFAULT_SENTINEL_RECONNECT_CONFIG.maxMs,
+    "REDIS_SENTINEL_RECONNECT_MAX_MS"
+  );
+  const maxAttempts = readPositiveNumber(
+    env.REDIS_SENTINEL_RECONNECT_MAX_ATTEMPTS,
+    DEFAULT_SENTINEL_RECONNECT_CONFIG.maxAttempts,
+    "REDIS_SENTINEL_RECONNECT_MAX_ATTEMPTS"
+  );
+  const rawJitter = env.REDIS_SENTINEL_RECONNECT_JITTER_RATIO;
+  const jitterRatio =
+    rawJitter === undefined || rawJitter.trim() === ""
+      ? DEFAULT_SENTINEL_RECONNECT_CONFIG.jitterRatio
+      : Number(rawJitter);
+  if (!Number.isFinite(jitterRatio) || jitterRatio < 0 || jitterRatio > 1) {
+    throw new Error("REDIS_SENTINEL_RECONNECT_JITTER_RATIO must be between 0 and 1");
+  }
+
+  return {
+    baseMs: Math.min(baseMs, maxMs),
+    maxMs,
+    jitterRatio,
+    maxAttempts: Math.floor(maxAttempts),
+  };
 }
 
 /** Build a `RedisClusterConfig` from environment variables (comma-separated `host:port` list). */
@@ -148,6 +206,7 @@ export function isSentinelEnabled(env: NodeJS.ProcessEnv = process.env): boolean
 let client: CacheRedisClient | null = null;
 let cluster: Cluster | null = null;
 let sentinelClient: Redis | null = null;
+let sentinelReconnectManager: SentinelReconnectManager | null = null;
 let healthMonitor: RedisClusterHealthMonitor | null = null;
 
 function shouldUseMock(env: NodeJS.ProcessEnv): boolean {
@@ -220,11 +279,17 @@ export function getCacheClient(
       sentinelCount: sentinelConfig.sentinels.length,
     });
 
+    const reconnectConfig = sentinelReconnectConfigFromEnv(env);
+    sentinelReconnectManager = new SentinelReconnectManager(reconnectConfig);
+
     sentinelClient = new Redis({
       sentinels: sentinelConfig.sentinels,
       name: sentinelConfig.masterName,
       role: sentinelConfig.role,
-      sentinelRetryStrategy: config.retryStrategy,
+      // Jittered exponential backoff per dropped socket, so a master
+      // failover does not turn every socket into a simultaneous reconnect.
+      sentinelRetryStrategy: (times: number) =>
+        sentinelReconnectDelay(Math.max(0, times - 1), reconnectConfig),
       retryStrategy: config.retryStrategy,
       connectTimeout: sentinelConfig.sentinelTimeoutMs ?? config.connectTimeout,
       commandTimeout: config.commandTimeout,
@@ -238,7 +303,18 @@ export function getCacheClient(
       log.warn("Redis Sentinel connection error", { error: error.message });
     });
     sentinelClient.on("+switch-master", (...args: unknown[]) => {
-      log.warn("Redis Sentinel promoted a new master — ioredis reconnected automatically", { args });
+      log.warn("Redis Sentinel promoted a new master — scheduling one reconnect", { args });
+      // ioredis normally reconnects by itself; this single-flight pass covers
+      // the case where the client was left in "end"/"close" after failover.
+      // Concurrent +switch-master events share the same in-flight promise.
+      void sentinelReconnectManager?.schedule(async () => {
+        if (
+          sentinelClient &&
+          (sentinelClient.status === "end" || sentinelClient.status === "close")
+        ) {
+          await sentinelClient.connect();
+        }
+      });
     });
     sentinelClient.on("ready", () => {
       log.info("Redis Sentinel client ready", { masterName: sentinelConfig.masterName });
@@ -356,6 +432,11 @@ export function getClusterHealthMonitor(): RedisClusterHealthMonitor | null {
   return healthMonitor;
 }
 
+/** The active Sentinel reconnect single-flight manager, or `null`. */
+export function getSentinelReconnectManager(): SentinelReconnectManager | null {
+  return sentinelReconnectManager;
+}
+
 /** Test-only seam: inject a fake/mock client instead of the singleton. */
 export function _setCacheClientForTesting(testClient: CacheRedisClient): void {
   client = testClient;
@@ -366,6 +447,8 @@ export function _resetCacheClientForTesting(): void {
   client = null;
   cluster = null;
   sentinelClient = null;
+  sentinelReconnectManager?.reset();
+  sentinelReconnectManager = null;
   healthMonitor?.stop();
   healthMonitor = null;
 }
@@ -380,4 +463,6 @@ export async function disconnectCacheClient(): Promise<void> {
   }
   cluster = null;
   sentinelClient = null;
+  sentinelReconnectManager?.reset();
+  sentinelReconnectManager = null;
 }

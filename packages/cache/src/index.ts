@@ -15,14 +15,23 @@ export {
   getCacheClient,
   clusterConfigFromEnv,
   sentinelConfigFromEnv,
+  sentinelReconnectConfigFromEnv,
   isSentinelEnabled,
   defaultRetryStrategy,
   disconnectCacheClient,
   getClusterFailoverClient,
   getClusterHealthMonitor,
+  getSentinelReconnectManager,
   _setCacheClientForTesting,
   _resetCacheClientForTesting,
 } from "./client.js";
+
+export {
+  DEFAULT_SENTINEL_RECONNECT_CONFIG,
+  SentinelReconnectManager,
+  sentinelReconnectDelay,
+  type SentinelReconnectConfig,
+} from "./sentinelReconnect.js";
 
 export {
   parseNodeList,
