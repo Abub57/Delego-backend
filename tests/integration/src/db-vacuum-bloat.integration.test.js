@@ -126,6 +126,25 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
     await client.query(`ANALYZE "${SCHEMA}"."${table}"`);
   }
 
+  /**
+   * Waits until the collector reports the fixture as churned.
+   *
+   * `churnTable` only issues the DML; the counters it bumps reach
+   * `pg_stat_user_tables` asynchronously (see `eventually`), and in CI that
+   * lag has been observed to run to ~10s. A `runOnce()` that scans before the
+   * report lands sees the fixture as clean, so it is neither vacuumed nor
+   * reported as a dry-run skip.
+   */
+  async function waitForChurn(scanner) {
+    const reported = await eventually(async () => {
+      const found = (await scanner.scan()).find(
+        (s) => s.schemaname === SCHEMA && s.relname === table,
+      );
+      return found && found.n_dead_tup > found.n_live_tup ? found : null;
+    }, { timeoutMs: 30_000 });
+    assert.ok(reported, "expected the collector to report the churned fixture table");
+  }
+
   it("scans pg_stat_user_tables and returns the documented dead/live tuple columns", async () => {
     const scanner = new PgBloatScanner(pool);
     const stats = await scanner.scan();
@@ -211,13 +230,15 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
   });
 
   it("runs the full worker pass and records history", async () => {
+    const scanner = new PgBloatScanner(pool);
     await churnTable();
+    await waitForChurn(scanner);
 
     const sink = new RecordingAlertSink();
     const history = new InMemoryVacuumHistoryStore();
     const executor = new PgVacuumExecutor(pool, 30_000);
     const service = new DatabaseVacuumService({
-      scanner: new PgBloatScanner(pool),
+      scanner,
       executor,
       history,
       alertRouter: new DeduplicatingAlertRouter(sink),
@@ -251,18 +272,20 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
   });
 
   it("does not execute anything in dry run mode", async () => {
+    const scanner = new PgBloatScanner(pool);
     await churnTable();
+    await waitForChurn(scanner);
 
     const executor = new RecordingVacuumExecutor();
     const service = new DatabaseVacuumService({
-      scanner: new PgBloatScanner(pool),
+      scanner,
       executor,
       alertRouter: new DeduplicatingAlertRouter(new RecordingAlertSink()),
       thresholds: { minTableSizeBytes: 0, deadTupleRatio: 0.2, deadTupleCount: 1000 },
       dryRun: true,
     });
 
-    const before = await new PgBloatScanner(pool).scan();
+    const before = await scanner.scan();
     const beforeDead = before.find((s) => s.schemaname === SCHEMA && s.relname === table)
       ?.n_dead_tup;
 
@@ -272,7 +295,7 @@ suite("database bloat detection and VACUUM ANALYZE against real Postgres (#382)"
     assert.equal(executor.calls.length, 0);
     assert.ok(summary.skipped.some((s) => s.reason.includes("dry run")));
 
-    const after = await new PgBloatScanner(pool).scan();
+    const after = await scanner.scan();
     const afterDead = after.find((s) => s.schemaname === SCHEMA && s.relname === table)
       ?.n_dead_tup;
     assert.equal(afterDead, beforeDead, "a dry run must not reclaim anything");
