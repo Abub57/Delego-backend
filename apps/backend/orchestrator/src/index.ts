@@ -16,7 +16,7 @@ import {
 } from "@delegolabs/utils";
 import { Pool } from "pg";
 import { Redis } from "ioredis";
-import { getCacheClient } from "@delegolabs/cache";
+import { getCacheClient, acquireRedlock } from "@delegolabs/cache";
 import { createOrchestratorHealthRoutes } from "./health.js";
 import {
   createWorkflow,
@@ -543,14 +543,33 @@ async function main(): Promise<void> {
         try {
           const sagaId = `checkout:${input.orderId}`;
           const workflowInput = createCheckoutWorkflowInput(input, authenticatedUserId);
-          const result = await checkoutWorkflow(workflowInput, checkoutSagaCoordinator, sagaId);
-          json(res, result.status === "completed" || result.status === "compensated" ? 200 : 502, {
-            data: serializeSagaExecution(result),
-            error:
-              result.status === "completed" || result.status === "compensated"
-                ? null
-                : { code: "CHECKOUT_SAGA_FAILED", message: result.error ?? "Checkout saga failed" },
+          const lock = await acquireRedlock(getCacheClient(), {
+            resource: `cart:${workflowInput.orderId}`,
+            ttlMs: 15_000,
+            retryCount: 0,
+            retryDelayMs: 50,
           });
+
+          if (!lock) {
+            json(res, 409, {
+              data: null,
+              error: { code: "CART_ALREADY_LOCKED", message: `Checkout already in progress for cart:${workflowInput.orderId}` },
+            });
+            return;
+          }
+
+          try {
+            const result = await checkoutWorkflow(workflowInput, checkoutSagaCoordinator, sagaId);
+            json(res, result.status === "completed" || result.status === "compensated" ? 200 : 502, {
+              data: serializeSagaExecution(result),
+              error:
+                result.status === "completed" || result.status === "compensated"
+                  ? null
+                  : { code: "CHECKOUT_SAGA_FAILED", message: result.error ?? "Checkout saga failed" },
+            });
+          } finally {
+            await lock.release();
+          }
         } catch (err) {
           if (err instanceof InsufficientStockError) {
             json(res, 409, {

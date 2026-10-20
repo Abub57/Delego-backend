@@ -84,3 +84,12 @@ export {
   type RedisLockPayload,
   type RedisLockRenewResult,
 } from "./lock.js";
+export {
+  acquireRedlock,
+  releaseRedlock,
+  extendRedlock,
+  lockKeyForResource,
+  withCartCheckoutLock,
+  type RedlockOptions,
+  type LockHandle,
+} from "./redlock.js";
