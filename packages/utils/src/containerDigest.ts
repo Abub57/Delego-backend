@@ -34,10 +34,10 @@ export class ContainerRolloutVerifier {
     }
 
     return {
-      imageName,
-      expectedDigest,
+      imageUri: imageName,
+      digest: actualDigest,
+      signedBy: "",
       verified,
     };
   }
 }
-

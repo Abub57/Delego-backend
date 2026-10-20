@@ -10,12 +10,12 @@ export const buyerAgentDefinition: AgentDefinition = {
 
 /**
  * Run the buyer agent for a given context.
- * TODO: Integrate LLM provider and tool execution
+ * TODO: Integrate Agent runtime and tool execution
  */
 export async function runBuyerAgent(
   _context: AgentRunContext,
   _prompt: string
-): Promise<AgentRunResult> {
+): Promise<AngentRunResult> {
   return {
     runId: "placeholder",
     status: "awaiting_approval",
