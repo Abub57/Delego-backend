@@ -122,4 +122,4 @@ migration 025).
 
 - Data model: `packages/types/src/pii-registry.ts`
 - Implementation: `packages/utils/src/encryption/*`
-- Schema: `database/migrations/038_column_encryption.sql`
+- Schema: `database/migrations/049_column_encryption.sql`

@@ -1,4 +1,4 @@
--- Migration: 045_product_variants.sql
+-- Migration: 061_product_variants.sql
 -- Description: Create product_variants table for variable products (sizes, colors, materials)
 -- Created: 2026-10-19
 

@@ -1,4 +1,4 @@
--- Migration: 038_purchase_proposals
+-- Migration: 050_purchase_proposals
 -- Issue: #265 Purchase Proposal Generation & Limits Pre-Check Service
 -- Description: Adds purchase_proposals table and the spent_stroops / version
 --              columns to delegations for atomic allowance tracking.

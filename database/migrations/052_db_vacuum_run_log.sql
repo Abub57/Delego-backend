@@ -1,4 +1,4 @@
--- Migration: 040_db_vacuum_run_log
+-- Migration: 052_db_vacuum_run_log
 -- Description: Audit trail for the automated database vacuum and bloat
 -- monitoring worker (Issue #382). The worker records one row per table per
 -- run so operators can answer "when was this last vacuumed, and did it work?"

@@ -1,4 +1,4 @@
--- Rollback migration: 040_passkey_credentials
+-- Rollback migration: 058_passkey_credentials
 -- Issue: #367 Passkey / WebAuthn Biometric Authentication Verification Service
 -- Description: Drop WebAuthn credential and challenge storage.
 

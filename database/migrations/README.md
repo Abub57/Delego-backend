@@ -56,15 +56,36 @@ The incremental migrations are:
 | `035_account_recovery.sql` | Account recovery configurations and challenges (#109) |
 | `036_notification_preference_center.sql` | Notification preference center: org defaults, JSONB preference documents, and migration history (#115) |
 | `037_multi_currency.sql` | Multi-currency payments, FX rates, and currency settlements (#112) |
-| `038_column_encryption.sql` | Column-level encryption for PII at rest: data-encryption-key version registry and append-only key-access audit log (#68) |
+| `038_product_catalog_vector_search.sql` | Canonical `merchants` and `products` definitions with pgvector embeddings and semantic-search indexes, plus the agent tool audit log (#262/#263) |
 | `039_user_agent_memories.sql` | Long-term user preference memory with pgvector embeddings and IVFFLAT index (#266) |
-| `040_passkey_credentials.sql` | WebAuthn passkey credentials (public key, signature counter, transports) and single-use ceremony challenges (#367) |
+| `040_orchestrator_dlq.sql` | Dead letter queue for failed BullMQ jobs with auto-replay (#310) |
+| `041_product_catalog.sql` | Product catalog indexes (unique merchant SKU, price, full-text search) over `products` |
+| `042_dual_control_approvals.sql` | Multi-party dual-control quorum approvals and sign-off signatures (#303) |
 | `043_spend_metrics.sql` | Daily/monthly completed escrow spend summaries with user/date covering indexes (#306); paired rollback drops both summaries |
+| `044_dlq_stack_trace.sql` | Full stack traces and cause chains on orchestrator DLQ records (#347) |
+| `045_merchant_inventory_reservations.sql` | Per-order inventory reservation ledger with duplicate-reservation protection (#342) |
+| `046_reviews.sql` | Product reviews with buyer verification, review appeals, and order delivery evidence |
+| `047_merchant_revenue_analytics.sql` | Currency, platform-fee, and settlement columns plus revenue indexes for `payment_records` |
+| `048_merchant_domain_verification.sql` | SEP-0001 `stellar.toml` domain-verification columns, re-check index, and audit trail for merchants |
+| `049_column_encryption.sql` | Column-level encryption for PII at rest: data-encryption-key version registry and append-only key-access audit log (#68) |
+| `050_purchase_proposals.sql` | Purchase proposals plus delegation spend/version tracking for atomic allowance limits (#265) |
+| `051_audit_chain.sql` | Cryptographic SHA-256 tamper-evident audit log chaining with append-only triggers (#358) |
+| `052_db_vacuum_run_log.sql` | Per-table vacuum run audit trail for the bloat monitoring worker (#382) |
+| `053_dispute_escalation.sql` | Escalation tier columns and stalled-dispute index (#403) |
+| `054_escrow_archives.sql` | Cold storage for long-settled escrows populated by the CDC archiver (#290) |
+| `055_merchants.sql` | Merchant registration table; a no-op once 038 has created `merchants` |
+| `056_merchant_profile_fields.sql` | Merchant profile fields: `support_email` and `webhook_url` |
+| `057_merchant_inventory.sql` | Per-merchant/product available and reserved stock counters |
+| `058_passkey_credentials.sql` | WebAuthn passkey credentials (public key, signature counter, transports) and single-use ceremony challenges (#367) |
+| `059_soroban_event_sync_checkpoints.sql` | Soroban RPC ingestion checkpoints and the processed-event deduplication log (#366) |
+| `060_webhook_secret_rotation.sql` | Merchant webhook HMAC signing-secret rotation state and grace periods (#381) |
+| `061_product_variants.sql` | Product variants (sizes, colors, materials) with attribute and barcode indexes |
+| `062_soroban_contract_events.sql` | Durable, idempotent store for ingested Soroban contract events |
 | `20261020_webhook_delivery_forensic_logs.sql` | Granular per-attempt webhook delivery forensic log (`webhook_delivery_logs`): payload SHA-256 hash, HTTP status, latency, response body sample, and error message, with a partial index over failed attempts (`http_status >= 400 OR http_status IS NULL`) |
 
 ### Passkey / WebAuthn configuration (#367)
 
-`040_passkey_credentials.sql` backs the passkey ceremonies. The gateway reads
+`058_passkey_credentials.sql` backs the passkey ceremonies. The gateway reads
 its relying-party settings from the environment; there are no safe defaults for
 the RP ID or origins, so both must be set explicitly:
 

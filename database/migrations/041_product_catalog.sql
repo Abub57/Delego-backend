@@ -1,24 +1,13 @@
 -- Migration: 041_product_catalog
 -- Issue: Product Catalog Database Migration and CRUD
--- Description: Adds products table with full-text and price indexing for
---              merchant product listings.
---              Enforces: price_stroops > 0, stock_quantity >= 0
-
-CREATE TABLE IF NOT EXISTS products (
-  id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-  merchant_id     UUID         NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
-  sku             VARCHAR(64)  NOT NULL,
-  title           VARCHAR(255) NOT NULL,
-  description     TEXT,
-  price_stroops   BIGINT       NOT NULL CHECK (price_stroops > 0),
-  asset_code      VARCHAR(12)  NOT NULL DEFAULT 'USDC',
-  stock_quantity  INT          NOT NULL DEFAULT 0 CHECK (stock_quantity >= 0),
-  is_listed       BOOLEAN      NOT NULL DEFAULT TRUE,
-  image_url       TEXT,
-  metadata        JSONB        NOT NULL DEFAULT '{}',
-  created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-  updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
+-- Description: Adds the full-text and price indexes used for merchant product
+--              listing/browsing.
+--
+-- The `products` table itself is created by 038_product_catalog_vector_search.sql
+-- (which owns the canonical definition, including the constraints
+-- price_stroops > 0 and stock_quantity >= 0). This migration only adds indexes,
+-- so it must not re-declare the table — a second CREATE TABLE IF NOT EXISTS
+-- would silently no-op and mask schema drift.
 
 -- Composite unique constraint on (merchant_id, sku) — each merchant owns unique SKUs
 CREATE UNIQUE INDEX IF NOT EXISTS idx_products_merchant_sku

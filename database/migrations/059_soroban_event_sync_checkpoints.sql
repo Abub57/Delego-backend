@@ -1,4 +1,4 @@
--- Migration: 040_soroban_event_sync_checkpoints
+-- Migration: 059_soroban_event_sync_checkpoints
 -- Description: Durable PostgreSQL checkpoint store for the Soroban RPC event
 --              listener (Issue #366). Enables the ingestion worker to discover
 --              the last processed ledger sequence after a restart or network

@@ -1,4 +1,4 @@
--- Migration: 040_passkey_credentials
+-- Migration: 058_passkey_credentials
 -- Issue: #367 Passkey / WebAuthn Biometric Authentication Verification Service
 -- Description: Stores WebAuthn credential public keys, signature counters and
 --              registration challenges so passkeys can be used for passwordless

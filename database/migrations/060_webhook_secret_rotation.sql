@@ -1,4 +1,4 @@
--- Migration: 040_webhook_secret_rotation
+-- Migration: 060_webhook_secret_rotation
 -- Issue: #381 Merchant Webhook HMAC Signature Rotation Service
 -- Description: Persists rotation state so that in-flight grace periods survive
 --              service restarts. Each row stores the new (current) and old

@@ -1,4 +1,4 @@
--- Migration: 040_dispute_escalation
+-- Migration: 053_dispute_escalation
 -- Description: Tiered escalation tracking for stalled dispute arbitrations
 -- (Issue #403). Disputes left unresolved past the stall window are escalated
 -- from the tier1 queue to a senior arbitrator. These columns record the tier

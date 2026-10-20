@@ -1,4 +1,4 @@
--- Migration: 040_escrow_archives
+-- Migration: 054_escrow_archives
 -- Description: Cold storage for long-settled escrows, populated by the CDC
 --              escrow snapshot archiver (`apps/backend/cdc/src/archiver/`,
 --              Issue #290). Moving settled rows out of the live escrow table

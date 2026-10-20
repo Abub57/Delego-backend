@@ -1,4 +1,4 @@
--- Down migration for 040_audit_chain (Issue #358)
+-- Down migration for 051_audit_chain (Issue #358)
 DROP TRIGGER IF EXISTS trg_audit_chain_no_delete ON audit_chain;
 DROP TRIGGER IF EXISTS trg_audit_chain_no_update ON audit_chain;
 DROP FUNCTION IF EXISTS audit_chain_prevent_mutation();

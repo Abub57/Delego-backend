@@ -1,4 +1,4 @@
--- Migration: 040_audit_chain
+-- Migration: 051_audit_chain
 -- Description: Cryptographic SHA-256 tamper-evident audit log chaining table (Issue #358).
 --
 -- This table stores the cryptographically chained audit log entries where:

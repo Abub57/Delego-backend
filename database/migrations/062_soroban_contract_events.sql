@@ -1,7 +1,7 @@
--- Migration: 046_soroban_contract_events
+-- Migration: 062_soroban_contract_events
 -- Description: Durable, idempotent store for ingested Soroban contract events,
 --              written in the same transaction that advances the watermark in
---              `soroban_event_sync_checkpoints` (migration 040).
+--              `soroban_event_sync_checkpoints` (migration 059).
 --
 -- Resume semantics (see apps/backend/cdc/src/sorobanEvents/resumableIngestion.ts):
 --   - `soroban_event_sync_checkpoints.last_ledger_sequence` = L means every
