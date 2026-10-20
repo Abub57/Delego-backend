@@ -9,8 +9,7 @@
 
 import type { Sequelize } from "sequelize";
 import { QueryTypes } from "sequelize";
-import { createLogger } from "@delegolabs/utils";
-import { TaggedCache, type TaggedCacheRedisClient } from "@delegolabs/utils/cache/taggedCache.js";
+import { createLogger, TaggedCache, type TaggedCacheRedisClient } from "@delegolabs/utils";
 import { sequelize as defaultSequelize } from "../db.js";
 import { getRedisClient } from "../redisClient.js";
 import {

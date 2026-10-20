@@ -1,3 +1,4 @@
+import type { HasManyOptions } from "sequelize";
 import { User } from "./User.js";
 import { Wallet } from "./Wallet.js";
 import { Delegation } from "./Delegation.js";
@@ -81,7 +82,7 @@ Merchant.hasMany(ReviewAppeal, { foreignKey: "merchantId", as: "appeals" });
 ReviewAppeal.belongsTo(Merchant, { foreignKey: "merchantId", as: "merchant" });
 
 // PaymentRecord associations (for review buyer verification)
-PaymentRecord.hasMany(Review, { foreignKey: "orderId", targetKey: "orderId", as: "reviews" });
+PaymentRecord.hasMany(Review, { foreignKey: "orderId", targetKey: "orderId", as: "reviews" } as HasManyOptions);
 Review.belongsTo(PaymentRecord, { foreignKey: "orderId", targetKey: "orderId", as: "payment" });
 
 export {

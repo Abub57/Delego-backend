@@ -88,7 +88,7 @@ import {
   validateCreateSubscriptionRequest,
   validateRenewRequest,
 } from "./subscriptions/validation.js";
-import { registerShipment, getShipment, type RegisterShipmentDTO, RegisterShipmentResponse } from "./shipping/service.js";
+import { registerShipment, getShipment, type RegisterShipmentDTO } from "./shipping/service.js";
 import { validateRegisterShipment } from "./shipping/validation.js";
 import {
   reserveStock,
@@ -96,9 +96,8 @@ import {
   getAvailableStock,
   validateReserveStockRequest,
   validateReservationId,
-  type InsufficientStockError,
 } from "./inventory/index.js";
-import { initiatePayout, validateInitiatePayoutRequest, type InitiatePayoutResponse } from "./payouts/index.js";
+import { initiatePayout, validateInitiatePayoutRequest } from "./payouts/index.js";
 import {
   createDisbursementApproval,
   collectOfficerSignature,
@@ -1321,11 +1320,12 @@ export function registerRoutes(): Route[] {
     // Explicitly release a reservation (called after escrow is funded)
     route("POST", "/api/v1/inventory/reservations/:reservationId/release", async (_req, res, params) => {
       try {
-        const { ok: idOk, value: reservationId, error: idError } = validateReservationId(params.reservationId);
-        if (!idOk) {
-          sendValidationError(res, idError as any);
+        const validatedId = validateReservationId(params.reservationId);
+        if (!validatedId.ok) {
+          sendValidationError(res, validatedId.error);
           return;
         }
+        const reservationId = validatedId.value;
 
         const result = await releaseReservation(reservationId, { strict: false });
 

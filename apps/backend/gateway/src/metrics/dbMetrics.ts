@@ -55,8 +55,6 @@ const DEFAULT_CONFIG: DbMetricsConfig = {
   enableSlowQueryLogging: true,
 };
 
-const DEFAULT_HISTOGRAM_BUCKETS = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
-
 // ---------------------------------------------------------------------------
 // Internal State
 // ---------------------------------------------------------------------------
@@ -128,7 +126,7 @@ function createStandaloneHistogram(): Histogram {
   };
 }
 
-function createSimpleCounter(name: string) {
+function createSimpleCounter(_name: string) {
   const counts = new Map<string, number>();
   return {
     inc(value = 1, labels?: Record<string, string>): void {

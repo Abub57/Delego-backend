@@ -1,5 +1,5 @@
 import { createLogger } from "@delegolabs/utils";
-import { SagaCoordinator, type SagaStep as BaseSagaStep, type SagaStore, type SagaRecord } from "../../src/saga/index.js";
+import { SagaCoordinator, type SagaStep as BaseSagaStep, type SagaStore } from "../../src/saga/index.js";
 import type { EscrowSagaContext } from "@delegolabs/types";
 import { getInventoryReservationService } from "../../src/inventory/reservation.js";
 

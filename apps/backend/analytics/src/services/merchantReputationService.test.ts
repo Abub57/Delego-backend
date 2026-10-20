@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { TaggedCacheRedisClient, RedisPipeline } from "@delegolabs/utils/cache/taggedCache.js";
+import type { TaggedCacheRedisClient, RedisPipeline } from "@delegolabs/utils";
 import { MerchantReputationService } from "./merchantReputationService.js";
 
 // ─── In-memory fake Redis client (same shape used by taggedCache.test.ts) ──

@@ -1,11 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Op } from "sequelize";
 import type { Route } from "@delegolabs/utils";
 import { route, createLogger, validatePublicKey } from "@delegolabs/utils";
 import { extractAuth } from "../../middleware/auth.js";
 import { validateSchema, CreateMerchantSchema, UpdateMerchantSchema } from "../../src/validation.js";
 import { readJsonBody, InvalidJsonError, BodyTooLargeError } from "../../src/request.js";
-import { badRequest, notFound, unauthorized, forbidden, sendApiError } from "../../src/errors.js";
+import { badRequest, notFound, unauthorized, sendApiError } from "../../src/errors.js";
 import { Merchant } from "../../src/models/index.js";
 
 const log = createLogger("gateway:merchant", process.env.LOG_LEVEL ?? "info");

@@ -1,6 +1,6 @@
 import { createLogger } from "@delegolabs/utils";
 import { v4 as uuidv4 } from "uuid";
-import type { InitiatePayoutResponse, PayoutRecord } from "./types.js";
+import type { InitiatePayoutResponse, PayoutCalculation, PayoutRecord } from "./types.js";
 
 const log = createLogger("payments:payouts-store", process.env.LOG_LEVEL ?? "info");
 
@@ -93,7 +93,7 @@ export function toPayoutResponse(record: PayoutRecord): InitiatePayoutResponse {
     grossAmountStroops: BigInt(record.grossAmountStroops),
     platformFeeStroops: BigInt(record.platformFeeStroops),
     netMerchantPayoutStroops: BigInt(record.netMerchantPayoutStroops),
-    transactionHash: record.transactionHash,
+    transactionHash: record.transactionHash ?? "",
     ledger: record.ledger ?? 0,
     status: record.status === "confirmed" || record.status === "submitted" ? record.status : "submitted",
     paidAt: record.createdAt.toISOString(),

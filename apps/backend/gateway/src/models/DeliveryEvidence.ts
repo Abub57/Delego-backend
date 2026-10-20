@@ -1,4 +1,4 @@
-import { Model, DataTypes, type Sequelize } from "sequelize";
+import { Model, DataTypes, type Sequelize, type InitOptions } from "sequelize";
 import { sequelize } from "../db.js";
 
 export class DeliveryEvidence extends Model {
@@ -123,7 +123,7 @@ export function initDeliveryEvidence(sequelizeInstance: Sequelize): void {
           name: "unique_evidence_per_order",
         },
       ],
-    }
+    } as InitOptions<DeliveryEvidence>
   );
 }
 

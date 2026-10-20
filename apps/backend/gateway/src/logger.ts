@@ -172,14 +172,14 @@ export function createRequestLoggingMiddleware() {
           const duration = Date.now() - startedAt;
           const message = `Completed ${req.method} ${req.url} - ${res.statusCode}`;
           if (res.statusCode >= 500) {
-            logger.error(message, { duration });
+            logger.error({ duration }, message);
           } else if (res.statusCode >= 400) {
-            logger.warn(message, { duration });
+            logger.warn({ duration }, message);
           } else {
-            logger.info(message, { duration });
+            logger.info({ duration }, message);
           }
         }
-        return originalEnd.apply(this, args as unknown[]);
+        return (originalEnd as (...a: unknown[]) => unknown).apply(this, args);
       };
 
       next();
@@ -259,7 +259,7 @@ declare module "http" {
 }
 
 // Log initialization
-logger.info("Logger initialized", {
+logger.info({
   level: logger.level,
   env: process.env.NODE_ENV,
-});
+}, "Logger initialized");

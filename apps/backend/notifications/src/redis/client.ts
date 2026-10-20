@@ -263,9 +263,7 @@ function createRedisClient(clientType: string, lazyConnect: boolean = false): Re
     retryStrategy,
     enableOfflineQueue: true, // Queue commands while disconnected
     enableReadyCheck: true,
-    connectTimeout: 10000,
-    // Prevent connection errors from throwing unhandled rejections
-    lazyConnect: lazyConnect
+    connectTimeout: 10000
   });
 
   attachEventListeners(client, clientType);

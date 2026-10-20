@@ -52,7 +52,6 @@ export {
   submitMerchantResponse,
 } from "./disputes/mediation.js";
 export { executePartialRefund } from "./disputes/partialRefund.js";
-export { submitMerchantResponse } from "./disputes/index.js";
 export { startSlaEscalationScheduler, findAndEscalateBreachedDisputes } from "./disputes/slaEscalation.js";
 export type {
   Dispute,
@@ -125,12 +124,11 @@ export { EscrowDisputedError, EscrowNotReleasableError } from "./autoRelease/typ
 // ─── #295 Shipping Exception & Lost Package Detector ───────────────────────
 
 export {
-  addBusinessDays,
-  businessDaysBetween,
   classifyAnomaly,
   detectShippingExceptions,
   startShippingExceptionScheduler,
 } from "./shipping/exceptionDetector.js";
+export { addBusinessDays, businessDaysBetween } from "./shipping/tracking.js";
 export { notifyShippingAnomaly, SHIPPING_ANOMALY_EVENT } from "./shipping/notifications.js";
 export type { ShippingAnomalyNotification } from "./shipping/notifications.js";
 export {

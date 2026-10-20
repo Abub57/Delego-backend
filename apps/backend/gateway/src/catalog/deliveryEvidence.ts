@@ -5,8 +5,8 @@ import { route, createLogger } from "@delegolabs/utils";
 import { extractAuth } from "../../middleware/auth.js";
 import { validateSchema, DeliveryEvidenceSchema } from "../../src/validation.js";
 import { readJsonBody, InvalidJsonError, BodyTooLargeError } from "../../src/request.js";
-import { badRequest, notFound, unauthorized, forbidden, sendApiError, success } from "../../src/errors.js";
-import { Merchant, Product, DeliveryEvidence } from "../../src/models/index.js";
+import { badRequest, notFound, unauthorized, sendApiError } from "../../src/errors.js";
+import { Merchant, DeliveryEvidence } from "../../src/models/index.js";
 
 const log = createLogger("gateway:delivery", process.env.LOG_LEVEL ?? "info");
 
@@ -52,7 +52,7 @@ async function uploadToIpfs(
         "pinata_api_key": IPFS_API_KEY,
         "pinata_secret_api_key": IPFS_API_SECRET,
       },
-      body: formData as unknown as BodyInit,
+      body: formData,
     });
 
     if (!response.ok) {
@@ -82,7 +82,7 @@ async function uploadToS3(
   fileBuffer: Buffer,
   orderId: string,
   fileName: string,
-  mimeType: string,
+  _mimeType: string,
 ): Promise<{ cid: string; storageUrl: string }> {
   // In production, this would use @aws-sdk/client-s3
   // For development, we'll create a deterministic "CID" based on hash

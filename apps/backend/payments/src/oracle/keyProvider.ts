@@ -13,11 +13,10 @@
  */
 
 import * as crypto from "node:crypto";
-import { createPublicKey, createSign, createVerify, type KeyObject } from "node:crypto";
-import { createLogger } from "@delegolabs/utils";
-import type { OracleKeyProvider, OracleKeyProviderConfig } from "./types.js";
+import { createPrivateKey, createPublicKey, createSign, createVerify, type KeyObject } from "node:crypto";
+import type { OracleKeyProvider } from "./types.js";
 
-const log = createLogger("payments:oracle:key-provider", process.env.LOG_LEVEL ?? "info");
+export type { OracleKeyProvider } from "./types.js";
 
 /** The Ed25519 curve identifier used by the oracle. */
 export const ORACLE_KEY_ALGORITHM = "ed25519" as const;

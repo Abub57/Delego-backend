@@ -6,14 +6,14 @@
 
 export {
   LocalOracleKeySigner,
-  AwsKmsOracleKeySigner,
-  VaultOracleKeySigner,
   ORACLE_KEY_ALGORITHM,
   type OracleKeySigner,
   type OraclePublicKey,
   type OracleSignResult,
   type OracleKeyProvider,
 } from "./keyProvider.js";
+export { AwsKmsOracleKeySigner } from "./awsKmsSigner.js";
+export { VaultOracleKeySigner } from "./vaultSigner.js";
 export {
   getOracleSigner,
   getOracleSignerConfig,

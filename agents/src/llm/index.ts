@@ -27,6 +27,7 @@ export { OpenAIClient } from "./openai.js";
 export { AnthropicClient } from "./anthropic.js";
 export { GeminiClient } from "./gemini.js";
 export {
+  FailoverLLMClient,
   createLLMClient,
   createDefaultLLMClient,
   createFailoverLLMClient,

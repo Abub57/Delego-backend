@@ -24,9 +24,11 @@
   "dependencies": {
     "@delegolabs/types": "workspace:*",
     "@delegolabs/utils": "workspace:*",
+    "@aws-sdk/client-kms": "^3.750.0",
     "pg": "^8.21.0",
     "ioredis": "^5.11.1",
     "bullmq": "^5.78.1",
+    "uuid": "^9.0.1",
     "@stellar/stellar-sdk": "^16.0.0"
   },
   "devDependencies": {
@@ -34,6 +36,7 @@
     "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.20.0",
+    "@types/uuid": "^9.0.8",
     "vitest": "^2.0.0"
   }
 }

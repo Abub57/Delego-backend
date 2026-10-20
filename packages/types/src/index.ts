@@ -14,6 +14,7 @@ export * from "./payment.js";
 export * from "./recovery.js";
 export * from "./multi-currency.js";
 export * from "./agent.js";
+export * from "./llm.js";
 export * from "./api.js";
 export * from "./pact-contract.js";
 export * from "./performance.js";

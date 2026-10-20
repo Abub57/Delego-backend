@@ -10,10 +10,7 @@
  * speaks the Vault HTTP API directly via `fetch`.
  */
 
-import { createLogger } from "@delegolabs/utils";
-import type { OracleKeyProvider, OracleKeySigner, OraclePublicKey } from "./keyProvider.js";
-
-const log = createLogger("payments:oracle:vault", process.env.LOG_LEVEL ?? "info");
+import type { OracleKeySigner, OraclePublicKey } from "./keyProvider.js";
 
 export interface VaultOracleSignerConfig {
   /** Vault transit key name (must be an ed25519 key). */

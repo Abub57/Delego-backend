@@ -5,7 +5,7 @@
 
 import type { RouteHandler } from "@delegolabs/utils";
 import { success, internalError } from "../errors.js";
-import { getSlaStatus, getSlowQueries, toPrometheusText, getDbMetricsConfig } from "./metrics/dbMetrics.js";
+import { getSlaStatus, getSlowQueries, toPrometheusText, getDbMetricsConfig } from "./dbMetrics.js";
 
 /**
  * GET /api/v1/metrics/db/sla

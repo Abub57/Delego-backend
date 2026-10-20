@@ -21,7 +21,7 @@ export interface SentryRequestContext {
   userId?: string;
 }
 
-type Middleware = (
+export type Middleware = (
   req: IncomingMessage,
   res: ServerResponse,
   next: (err?: any) => void
