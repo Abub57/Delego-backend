@@ -169,6 +169,18 @@ The retry behavior is configured via environment variables:
 | `EMAIL_DLQ_ENABLED` | boolean | true | true/false | Enable/disable DLQ logging (set to false for testing) |
 | `SENDGRID_API_KEY` | string | - | - | SendGrid API key for email dispatch |
 | `FROM_EMAIL` | string | noreply@delego.app | - | Sender email address |
+| `SMTP_HOST` | string | - | - | Enables pooled SMTP delivery; when unset, SendGrid is used |
+| `SMTP_PORT` | integer | 587 | 1-65535 | SMTP server port |
+| `SMTP_SECURE` | boolean | port-dependent | true/false | Use TLS immediately; defaults to true on port 465 |
+| `SMTP_USER` | string | - | - | Optional SMTP authentication username (set with `SMTP_PASSWORD`) |
+| `SMTP_PASSWORD` | string | - | - | Optional SMTP authentication password (set with `SMTP_USER`) |
+| `SMTP_RATE_LIMIT` | integer | 100 | 1+ | Maximum SMTP messages per second |
+
+When `SMTP_HOST` is configured it takes precedence over SendGrid. The service
+shares one Nodemailer pool with at most 10 connections, up to 100 messages per
+connection, and a 30-second socket inactivity timeout. Nodemailer replaces
+failed pool connections automatically. Without `SMTP_HOST`, delivery continues
+through the existing SendGrid client and requires `SENDGRID_API_KEY`.
 
 ### Retry Strategy
 
