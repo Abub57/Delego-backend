@@ -1,13 +1,14 @@
 /**
  * Dispute state machine (Issue #46).
  *
- * Enforces the linear lifecycle:
+ * Enforces the lifecycle:
  *
- *   open -> evidence_collection -> negotiation -> decided -> resolved
+ *   open -> evidence_collection -> negotiation -> merchant_responded -> decided -> resolved
  *
  * Each state may also re-enter itself (e.g. more evidence submitted while
- * already in `evidence_collection`) via {@link isNoOpTransition}, but no
- * state may move backwards or skip ahead.
+ * already in `evidence_collection`) via {@link isNoOpTransition}, and a
+ * mediator may decide straight from `negotiation` (the merchant response is
+ * optional), but no state may otherwise move backwards or skip ahead.
  */
 
 import { InvalidStateTransitionError, type DisputeStatus } from "./types.js";
@@ -17,7 +18,7 @@ const ORDER: DisputeStatus[] = ["open", "evidence_collection", "negotiation", "m
 const ALLOWED_TRANSITIONS: Record<DisputeStatus, DisputeStatus[]> = {
   open: ["open", "evidence_collection"],
   evidence_collection: ["evidence_collection", "negotiation"],
-  negotiation: ["negotiation", "merchant_responded"],
+  negotiation: ["negotiation", "merchant_responded", "decided"],
   merchant_responded: ["merchant_responded", "decided"],
   decided: ["decided", "resolved"],
   resolved: ["resolved"],

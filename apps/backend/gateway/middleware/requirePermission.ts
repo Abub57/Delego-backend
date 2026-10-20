@@ -72,14 +72,27 @@ export function guardPermission(
   handler: RouteHandler,
 ): RouteHandler {
   const middleware = requirePermission(permission);
-  return (req, res, params) =>
-    new Promise<void>((resolve, reject) => {
-      middleware(req, res, (err) => {
-        if (err) {
-          reject(err instanceof Error ? err : new Error(String(err)));
-          return;
-        }
-        Promise.resolve(handler(req, res, params)).then(resolve, reject);
-      });
+  return async (req, res, params) => {
+    // `requirePermission` is Express-style: on a 401/403 it writes the error
+    // response and returns *without* invoking `next`. Resolving only from the
+    // `next` callback therefore left this promise pending forever on every
+    // rejected request, even though a response had already been sent. Waiting
+    // on the middleware and recording whether it handed off settles both paths.
+    let handedOff = false;
+    let nextError: unknown;
+    await middleware(req, res, (err) => {
+      if (err) {
+        nextError = err;
+        return;
+      }
+      handedOff = true;
     });
+
+    if (nextError) {
+      throw nextError instanceof Error ? nextError : new Error(String(nextError));
+    }
+    if (!handedOff) return;
+
+    await handler(req, res, params);
+  };
 }

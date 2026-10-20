@@ -70,6 +70,26 @@ const fundParams: FundEscrowParams = {
   timeoutLedgers: 100,
 };
 
+/**
+ * Drives the fake clock until `promise` settles.
+ *
+ * The retry helper schedules its next backoff sleep only once the previous
+ * attempt has settled, so a single `advanceTimersByTimeAsync` call cannot walk
+ * the whole 2s/4s/8s schedule — the clock has to be pumped repeatedly while the
+ * promise chain between sleeps makes progress.
+ */
+async function settleWithClock<T>(promise: Promise<T>): Promise<T> {
+  let settled = false;
+  const markSettled = (): void => {
+    settled = true;
+  };
+  void promise.then(markSettled, markSettled);
+  for (let pass = 0; pass < 50 && !settled; pass++) {
+    await vi.advanceTimersByTimeAsync(60_000);
+  }
+  return promise;
+}
+
 describe("escrowCoordinator.fundEscrow — contract invocation retry (Issue #11)", () => {
   beforeEach(() => {
     vi.mocked(submitContractInvocation).mockReset();
@@ -99,9 +119,7 @@ describe("escrowCoordinator.fundEscrow — contract invocation retry (Issue #11)
       .mockResolvedValueOnce({ hash: "tx-fund", ledger: 7, success: true });
     vi.mocked(extractEscrowIdFromTx).mockResolvedValue("99");
 
-    const pending = escrowCoordinator.fundEscrow(fundParams);
-    await vi.advanceTimersByTimeAsync(10_000);
-    const result = await pending;
+    const result = await settleWithClock(escrowCoordinator.fundEscrow(fundParams));
 
     expect(result).toEqual({ escrowId: "99", txHash: "tx-fund", ledger: 7, status: "funded" });
     expect(submitContractInvocation).toHaveBeenCalledTimes(3);
@@ -111,9 +129,7 @@ describe("escrowCoordinator.fundEscrow — contract invocation retry (Issue #11)
     const contractError = new Error("Error(Contract, #35) CollateralRatioBelowMinimum");
     vi.mocked(submitContractInvocation).mockRejectedValue(contractError);
 
-    const pending = escrowCoordinator.fundEscrow(fundParams);
-    await vi.advanceTimersByTimeAsync(60_000);
-    const result = await pending;
+    const result = await settleWithClock(escrowCoordinator.fundEscrow(fundParams));
 
     expect(result.status).toBe("failed");
     expect(submitContractInvocation).toHaveBeenCalledTimes(1);
@@ -127,9 +143,7 @@ describe("escrowCoordinator.fundEscrow — contract invocation retry (Issue #11)
     const lastError = new Error("Wallet service unavailable: ETIMEDOUT");
     vi.mocked(submitContractInvocation).mockRejectedValue(lastError);
 
-    const pending = escrowCoordinator.fundEscrow(fundParams);
-    await vi.advanceTimersByTimeAsync(60_000);
-    const result = await pending;
+    const result = await settleWithClock(escrowCoordinator.fundEscrow(fundParams));
 
     expect(result.status).toBe("failed");
     // Initial attempt + 3 retries.

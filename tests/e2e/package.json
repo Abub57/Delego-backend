@@ -4,11 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "NODE_ENV=test node --test src/critical-journeys.test.js",
+    "test": "cross-env NODE_ENV=test node --test src/critical-journeys.test.js",
     "typecheck": "echo 'N/A'"
   },
   "dependencies": {
-    "@delegolabs/utils": "workspace:*",
-    "@delegolabs/types": "workspace:*"
+    "@delegolabs/types": "workspace:*",
+    "@delegolabs/utils": "workspace:*"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
   }
 }

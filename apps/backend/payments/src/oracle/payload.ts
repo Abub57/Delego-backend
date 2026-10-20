@@ -73,7 +73,7 @@ function encodePrefixedString(value: string): Buffer {
  * receipts before any signing work happens.
  */
 export function buildCanonicalDeliveryPayload(input: OracleDeliveryReceiptInput): Buffer {
-  if (!Number.isInteger(input.escrowId) || input.escrowId < 0) {
+  if (typeof input.escrowId !== "bigint" || input.escrowId < 0n) {
     throw new Error(`escrowId must be a non-negative integer, got ${input.escrowId}`);
   }
   if (typeof input.trackingNumber !== "string" || input.trackingNumber.length === 0) {
@@ -90,7 +90,7 @@ export function buildCanonicalDeliveryPayload(input: OracleDeliveryReceiptInput)
   }
 
   const escrowBuf = Buffer.alloc(ESCROW_ID_BYTES);
-  writeU64LE(escrowBuf, BigInt(input.escrowId), 0);
+  writeU64LE(escrowBuf, input.escrowId, 0);
 
   const deliveredBuf = Buffer.alloc(DELIVERED_AT_BYTES);
   writeI64LE(deliveredBuf, input.deliveredAt, 0);

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "NODE_ENV=test MOCK_REDIS=true node --import tsx --test --test-timeout=120000",
+    "test": "cross-env NODE_ENV=test MOCK_REDIS=true node --import tsx --test --test-timeout=120000",
     "typecheck": "echo 'N/A'"
   },
   "dependencies": {
@@ -12,7 +12,8 @@
   },
   "devDependencies": {
     "@stellar/stellar-sdk": "^16.0.0",
-    "tsx": "^4.19.0",
-    "jsonwebtoken": "^9.0.3"
+    "cross-env": "^10.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "tsx": "^4.19.0"
   }
 }

@@ -10,7 +10,15 @@ export default defineConfig({
       lines: 85,
     },
     environment: "node",
-    testTimeout: 30000,
+    // Each issuance shells out to the system `openssl` several times. Under a
+    // workspace-wide parallel run those spawns compete for CPU with every other
+    // package's workers and a single test has been observed taking 57s (against
+    // ~2s standalone), so the timeout has to absorb that contention.
+    testTimeout: 180000,
+    // Run this package's files one at a time: they are almost entirely `openssl`
+    // key-generation, and firing several in parallel only adds to the CPU
+    // contention that makes each individual spawn slow.
+    fileParallelism: false,
   },
 });
 

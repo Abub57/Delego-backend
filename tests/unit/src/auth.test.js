@@ -94,7 +94,12 @@ describe("Gateway Authentication System", () => {
       extractAuth(mockReq);
       const context = getAuthenticatedUserContext(mockReq);
 
-      assert.deepEqual(context, { userId, email: "user@delego.dev", roles: ["user"] });
+      assert.deepEqual(context, {
+        userId,
+        email: "user@delego.dev",
+        roles: ["user"],
+        permissions: [],
+      });
     });
 
     it("should leave the context unset when authentication fails", () => {

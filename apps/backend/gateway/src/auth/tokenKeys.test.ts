@@ -5,9 +5,22 @@
  * The gateway only touches JWT_SECRET for HS256 signing/verification (RS256/ES256 use
  * generated or configured asymmetric keys instead), so these tests exercise
  * `resolveJwtSecret` directly and via `SigningKeyStore` constructed with `alg: "HS256"`.
+ *
+ * The development warning is emitted through the gateway's structured Pino logger
+ * (see `b98b4f3`), not `console.warn`, so the logger module is mocked to observe it.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const tokenKeysLogger = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
+
+vi.mock("../logger.js", () => ({
+  createChildLogger: () => tokenKeysLogger,
+  logger: tokenKeysLogger,
+}));
+
 import {
   DEFAULT_JWT_SECRET,
   resolveJwtSecret,
@@ -21,6 +34,7 @@ const originalEnv = { ...process.env };
 describe("resolveJwtSecret (#32)", () => {
   beforeEach(() => {
     resetJwtSecretCache();
+    tokenKeysLogger.warn.mockClear();
   });
 
   afterEach(() => {
@@ -47,17 +61,15 @@ describe("resolveJwtSecret (#32)", () => {
   });
 
   it("warns but falls back to the default in development when unset", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(resolveJwtSecret(undefined, "development")).toBe(DEFAULT_JWT_SECRET);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("WARNING"));
-    warnSpy.mockRestore();
+    expect(tokenKeysLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("default JWT_SECRET"),
+    );
   });
 
   it("warns but falls back to the default in development when explicitly set to the default", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(resolveJwtSecret(DEFAULT_JWT_SECRET, "development")).toBe(DEFAULT_JWT_SECRET);
-    expect(warnSpy).toHaveBeenCalled();
-    warnSpy.mockRestore();
+    expect(tokenKeysLogger.warn).toHaveBeenCalled();
   });
 
   it("does not throw when NODE_ENV is unset (treated as non-production)", () => {
@@ -65,12 +77,10 @@ describe("resolveJwtSecret (#32)", () => {
   });
 
   it("only warns once across repeated calls until the cache is reset", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     resolveJwtSecret(undefined, "development");
     resolveJwtSecret(undefined, "development");
     resolveJwtSecret(undefined, "development");
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    warnSpy.mockRestore();
+    expect(tokenKeysLogger.warn).toHaveBeenCalledTimes(1);
   });
 
   it("reads from process.env.JWT_SECRET and process.env.NODE_ENV by default", () => {
@@ -83,6 +93,7 @@ describe("resolveJwtSecret (#32)", () => {
 describe("SigningKeyStore HS256 startup guard (#32)", () => {
   beforeEach(() => {
     resetSigningKeyStore();
+    tokenKeysLogger.warn.mockClear();
   });
 
   afterEach(() => {
@@ -114,11 +125,9 @@ describe("SigningKeyStore HS256 startup guard (#32)", () => {
   it("warns but constructs successfully in development when JWT_SECRET is unset and alg is HS256", () => {
     process.env.NODE_ENV = "development";
     delete process.env.JWT_SECRET;
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     expect(() => new SigningKeyStore("HS256")).not.toThrow();
-    expect(warnSpy).toHaveBeenCalled();
-    warnSpy.mockRestore();
+    expect(tokenKeysLogger.warn).toHaveBeenCalled();
   });
 
   it("signs and verifies HS256 tokens using the resolved secret", () => {

@@ -41,11 +41,14 @@ export async function signDeliveryReceipt(
   input: OracleDeliveryReceiptInput,
   options: OracleSignOptions = {}
 ): Promise<OracleSignedDeliveryReceipt | OracleSubmitReceiptResult> {
-  const payload = buildCanonicalDeliveryPayload(input);
-  const payloadHash = canonicalPayloadHash(payload);
-
   const signer = getOracleSigner();
+  // The signer's resolved key is authoritative: it is what the receipt
+  // publishes, what verifiers reconstruct the payload from, and what the
+  // escrow contract is registered with. The request body's oraclePublicKey
+  // is deliberately ignored so receipts are self-verifiable.
   const publicKey = await signer.getPublicKey();
+  const payload = buildCanonicalDeliveryPayload({ ...input, oraclePublicKey: publicKey });
+  const payloadHash = canonicalPayloadHash(payload);
   const signatureBuf = await signer.sign(payload);
   const signature = signatureBuf.toString("hex");
 
@@ -108,7 +111,7 @@ export async function verifyDeliveryReceipt(
     });
     return false;
   }
-  const { createVerify, createPublicKey } = await import("node:crypto");
+  const { verify: verifySignature, createPublicKey } = await import("node:crypto");
   let key: ReturnType<typeof createPublicKey>;
   try {
     key = createPublicKey({
@@ -123,10 +126,7 @@ export async function verifyDeliveryReceipt(
     });
     return false;
   }
-  const verify = createVerify("sha256");
-  verify.update(payload);
-  verify.end();
-  return verify.verify(key, signature);
+  return verifySignature(null, payload, key, signature);
 }
 
 /**

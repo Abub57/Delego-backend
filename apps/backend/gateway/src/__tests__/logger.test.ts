@@ -22,26 +22,58 @@ import {
 // ─── Test Helpers ───────────────────────────────────────────────────────────
 
 /**
+ * The module-level Pino logger writes to file descriptor 1 by default, which
+ * bypasses `process.stdout.write` entirely — spying on that method captures
+ * nothing. Pino only routes its output through the `process.stdout` stream when
+ * `process.stdout.write` has *already* been replaced at the moment the logger is
+ * constructed, and it makes that choice exactly once. `vi.hoisted` runs this
+ * before `../logger.js` is imported, so the shared root logger — and therefore
+ * every child logger and `req.log` — is built against the capturable stream.
+ *
+ * Interception installed later still works: Pino keeps the `process.stdout`
+ * object and calls `.write()` on it for each log line.
+ */
+const stdout = vi.hoisted(() => {
+  const lines: string[] = [];
+  const originalWrite = process.stdout.write;
+
+  process.stdout.write = ((
+    chunk: string | Uint8Array,
+    encoding?: BufferEncoding,
+    callback?: (err?: Error | null) => void,
+  ): boolean => {
+    lines.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return (originalWrite as (...args: unknown[]) => boolean).call(
+      process.stdout,
+      chunk,
+      encoding,
+      callback,
+    );
+  }) as typeof process.stdout.write;
+
+  return { lines };
+});
+
+/**
  * Capture logger output by mocking process.stdout.write
  */
 function captureLoggerOutput(): {
   logs: string[];
   restore: () => void;
 } {
-  const logs: string[] = [];
-  const originalWrite = process.stdout.write.bind(process.stdout);
-
-  // @ts-expect-error - Mocking stdout.write
-  process.stdout.write = (chunk: string | Uint8Array): boolean => {
-    const str = typeof chunk === "string" ? chunk : chunk.toString();
-    logs.push(str);
-    return true;
-  };
+  const start = stdout.lines.length;
 
   return {
-    logs,
+    // A live view: the logger writes while the test body runs, which is after
+    // this helper returns.
+    get logs(): string[] {
+      return stdout.lines.slice(start);
+    },
+    // The interception above is installed once for the whole file, so there is
+    // nothing to tear down here — dropping this test's lines keeps the buffer
+    // from growing across describes.
     restore: () => {
-      process.stdout.write = originalWrite;
+      stdout.lines.length = start;
     },
   };
 }
@@ -164,11 +196,16 @@ describe("Logger - Structured JSON Output", () => {
   });
 
   it("should include custom metadata in log entries", () => {
-    logger.info("Test with metadata", {
-      userId: "user-123",
-      action: "login",
-      timestamp: Date.now(),
-    });
+    // Pino's signature is `logger.info(mergingObject, message)`; metadata passed
+    // as the second argument is treated as the message and dropped.
+    logger.info(
+      {
+        userId: "user-123",
+        action: "login",
+        timestamp: Date.now(),
+      },
+      "Test with metadata"
+    );
 
     const parsed = parseLogLines(capture.logs);
     const logEntry = parsed.find((log) => log.msg?.includes("Test with metadata"));
@@ -183,7 +220,7 @@ describe("Logger - Structured JSON Output", () => {
     const error = new Error("Test error");
     error.stack = "Error: Test error\n    at test.ts:10:5";
 
-    logger.error("Error occurred", { error });
+    logger.error({ error }, "Error occurred");
 
     const parsed = parseLogLines(capture.logs);
     const logEntry = parsed.find((log) => log.msg?.includes("Error occurred"));
@@ -266,7 +303,7 @@ describe("Logger - Request ID Correlation", () => {
     const next = vi.fn(() => {
       // Simulate handler logging with request logger
       if ((req as any).log) {
-        (req as any).log.info("Processing user creation", { userId: "456" });
+        (req as any).log.info({ userId: "456" }, "Processing user creation");
       }
     });
 
@@ -343,7 +380,7 @@ describe("Logger - Child Loggers", () => {
   it("should create child logger with additional context", () => {
     const childLogger = createChildLogger({ module: "auth", component: "login" });
 
-    childLogger.info("User login attempt", { userId: "user-789" });
+    childLogger.info({ userId: "user-789" }, "User login attempt");
 
     const parsed = parseLogLines(capture.logs);
     const logEntry = parsed.find((log) => log.msg?.includes("login attempt"));
@@ -431,9 +468,10 @@ describe("Logger - Integration Scenarios", () => {
       if ((req as any).log) {
         (req as any).log.info("Validating delegation request");
         (req as any).log.info("Creating delegation in database");
-        (req as any).log.info("Delegation created successfully", {
-          delegationId: "del-123",
-        });
+        (req as any).log.info(
+          { delegationId: "del-123" },
+          "Delegation created successfully"
+        );
       }
       res.statusCode = 201;
       res.end();

@@ -1,12 +1,27 @@
 import { execFile } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
+/** Git for Windows bundles OpenSSL but does not expose it on PATH. */
+const WELL_KNOWN_OPENSSL_PATHS = [
+  "C:\\Program Files\\Git\\usr\\bin\\openssl.exe",
+  "C:\\Program Files (x86)\\Git\\usr\\bin\\openssl.exe",
+];
+
+/**
+ * Locates the OpenSSL binary: `OPENSSL_BIN` wins, then well-known install
+ * locations that are missing from PATH, and finally a PATH lookup.
+ */
+function opensslBinary(): string {
+  if (process.env.OPENSSL_BIN) return process.env.OPENSSL_BIN;
+  return WELL_KNOWN_OPENSSL_PATHS.find((p) => existsSync(p)) ?? "openssl";
+}
+
 function runOpenSsl(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("openssl", args, { maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(opensslBinary(), args, { maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         reject(new Error(`openssl failed: ${stderr || err.message}`));
         return;
