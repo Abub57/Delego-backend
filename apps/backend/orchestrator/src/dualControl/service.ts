@@ -26,6 +26,7 @@ export interface DualControlApproval {
   requiredSignatures: number;
   createdByUserId: string;
   status: DualControlStatus;
+  expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -43,6 +44,8 @@ export interface CreateApprovalRequest {
   createdByUserId: string;
   /** M in M-of-N. Defaults to 2. */
   requiredSignatures?: number;
+  /** Expiration time for the approval. Defaults to 24 hours from creation. */
+  expiresAt?: Date;
 }
 
 export interface SignApprovalRequest {
@@ -76,6 +79,7 @@ interface ApprovalRow {
   required_signatures: number;
   created_by_user_id: string;
   status: string;
+  expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -95,6 +99,7 @@ function toApproval(row: ApprovalRow): DualControlApproval {
     requiredSignatures: Number(row.required_signatures),
     createdByUserId: row.created_by_user_id,
     status: row.status as DualControlStatus,
+    expiresAt: row.expires_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -111,7 +116,7 @@ function toSignature(row: SignatureRow): DualControlSignature {
 }
 
 const APPROVAL_COLUMNS =
-  "id, order_id, required_signatures, created_by_user_id, status, created_at, updated_at";
+  "id, order_id, required_signatures, created_by_user_id, status, expires_at, created_at, updated_at";
 
 export class DualControlService {
   constructor(private readonly db: Pool) {}
@@ -124,17 +129,21 @@ export class DualControlService {
       );
     }
 
+    // Default expiration to 24 hours from now if not provided
+    const expiresAt = request.expiresAt ?? new Date(Date.now() + 24 * 60 * 60 * 1000);
+
     const result = await this.db.query(
-      `INSERT INTO dual_control_approvals (order_id, required_signatures, created_by_user_id)
-       VALUES ($1, $2, $3)
+      `INSERT INTO dual_control_approvals (order_id, required_signatures, created_by_user_id, expires_at)
+       VALUES ($1, $2, $3, $4)
        RETURNING ${APPROVAL_COLUMNS}`,
-      [request.orderId, required, request.createdByUserId]
+      [request.orderId, required, request.createdByUserId, expiresAt]
     );
     const approval = toApproval(result.rows[0] as ApprovalRow);
     logger.info("Dual-control approval created", {
       approvalId: approval.id,
       orderId: approval.orderId,
       requiredSignatures: approval.requiredSignatures,
+      expiresAt: approval.expiresAt,
     });
     return approval;
   }
