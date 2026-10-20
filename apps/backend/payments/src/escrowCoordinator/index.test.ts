@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FundEscrowParams, PaymentRecord } from "./types.js";
 import { escrowCoordinator } from "./index.js";
 import { extractEscrowIdFromTx, submitContractInvocation } from "./contractClient.js";
+import { checkEscrowVelocity } from "./fraudGuard.js";
 import {
   createPaymentRecord,
   findPaymentRecordByOrderId,
@@ -34,6 +35,14 @@ vi.mock("./escrowFundingLock.js", () => ({
     acquireLock: vi.fn().mockResolvedValue(null),
     releaseLock: vi.fn(),
   })),
+}));
+
+// `fundEscrow` calls the fraud guard before submitting, and the real guard
+// fetches FRAUD_DETECTION_URL (localhost:3013 by default). Under fake timers
+// that fetch never settles, so the test would time out instead of exercising
+// the retry logic.
+vi.mock("./fraudGuard.js", () => ({
+  checkEscrowVelocity: vi.fn().mockResolvedValue({ paused: false }),
 }));
 
 function makeRecord(overrides: Partial<PaymentRecord> = {}): PaymentRecord {
@@ -97,12 +106,14 @@ describe("escrowCoordinator.fundEscrow — contract invocation retry (Issue #11)
     vi.mocked(findPaymentRecordByOrderId).mockReset();
     vi.mocked(createPaymentRecord).mockReset();
     vi.mocked(updatePaymentRecord).mockReset();
+    vi.mocked(checkEscrowVelocity).mockReset();
 
     vi.mocked(findPaymentRecordByOrderId).mockResolvedValue(null);
     vi.mocked(createPaymentRecord).mockImplementation(async () => makeRecord());
     vi.mocked(updatePaymentRecord).mockImplementation(async (id, update) =>
       makeRecord({ id, ...update } as Partial<PaymentRecord>)
     );
+    vi.mocked(checkEscrowVelocity).mockResolvedValue({ paused: false });
 
     vi.useFakeTimers();
   });
