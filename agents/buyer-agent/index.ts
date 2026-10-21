@@ -15,7 +15,7 @@ export const buyerAgentDefinition: AgentDefinition = {
 export async function runBuyerAgent(
   _context: AgentRunContext,
   _prompt: string
-): Promise<AgentRunResult> {
+): Promise<AngentRunResult> {
   return {
     runId: "placeholder",
     status: "awaiting_approval",

@@ -24,7 +24,7 @@ export interface PenTestFinding {
   id: string;
   title: string;
   severity: PenTestSeverity;
-  cvssScore: number;
+  cvwsScore: number;
   cwe: string;
   description: string;
   impact: string;
@@ -72,4 +72,12 @@ export interface EmergencyBroadcastSignal {
   targetId?: string;
   signedByAdmin: string;
   timestamp: number;
+}
+
+/** Container Digest Verification */
+export interface ContainerDigestVerification {
+  imageUri: string;
+  digest: string;
+  signedBy: string;
+  verified: boolean;
 }
