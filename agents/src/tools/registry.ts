@@ -63,6 +63,19 @@ export interface ToolAuditEntry {
 /** Persist-to-database callback. Implementations should write to the audit log table. */
 export type AuditLogger = (entry: ToolAuditEntry) => Promise<void>;
 
+/**
+ * Issue #533 — optional pre-execution guard.
+ *
+ * Invoked immediately before a tool's `execute` runs. Throwing aborts
+ * execution, which is how the spend-velocity guard blocks a money-moving tool
+ * call whose proposed volume breaches the user's policy.
+ */
+export type PreExecutionGuard = (
+  toolName: string,
+  input: unknown,
+  context: AgentContext
+) => Promise<void> | void;
+
 /** In-memory no-op used when no persistent logger is configured. */
 const noopAuditLogger: AuditLogger = async () => {};
 
@@ -181,7 +194,8 @@ export class ToolRegistry {
 
   constructor(
     auditLogger: AuditLogger = noopAuditLogger,
-    private readonly sanitizationOptions: SanitizationOptions = {}
+    private readonly sanitizationOptions: SanitizationOptions = {},
+    private readonly preExecutionGuard?: PreExecutionGuard
   ) {
     this.auditLogger = auditLogger;
   }
@@ -329,7 +343,13 @@ export class ToolRegistry {
       }
       parsedInput = sanitized.validatedArguments;
 
-      // 2b. Sandboxed execution with timeout
+      // 2b. Spend-velocity / budget guard — aborts execution when a policy
+      //     threshold (e.g. hourly spend velocity) would be breached (#533).
+      if (this.preExecutionGuard) {
+        await this.preExecutionGuard(toolName, parsedInput, context);
+      }
+
+      // 2c. Sandboxed execution with timeout
       output = await executeWithTimeout(
         () => tool.execute(parsedInput, context),
         TOOL_EXECUTION_TIMEOUT_MS,

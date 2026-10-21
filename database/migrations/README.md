@@ -68,6 +68,7 @@ The incremental migrations are:
 | `047_merchant_revenue_analytics.sql` | Currency, platform-fee, and settlement columns plus revenue indexes for `payment_records` |
 | `048_merchant_domain_verification.sql` | SEP-0001 `stellar.toml` domain-verification columns, re-check index, and audit trail for merchants |
 | `049_column_encryption.sql` | Column-level encryption for PII at rest: data-encryption-key version registry and append-only key-access audit log (#68) |
+| `049_review_moderation_audit.sql` | Append-only audit trail for administrative review appeal verdicts (#520) |
 | `050_purchase_proposals.sql` | Purchase proposals plus delegation spend/version tracking for atomic allowance limits (#265) |
 | `051_audit_chain.sql` | Cryptographic SHA-256 tamper-evident audit log chaining with append-only triggers (#358) |
 | `052_db_vacuum_run_log.sql` | Per-table vacuum run audit trail for the bloat monitoring worker (#382) |

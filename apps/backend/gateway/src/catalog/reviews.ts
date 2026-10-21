@@ -1,14 +1,22 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Op } from "sequelize";
 import type { Route } from "@delegolabs/utils";
-import { route, createLogger } from "@delegolabs/utils";
-import { extractAuth } from "../../middleware/auth.js";
-import { validateSchema, ReviewSubmissionSchema, ReviewAppealSchema, ReviewModerationSchema } from "../../src/validation.js";
+import { route, createLogger, validatePublicKey } from "@delegolabs/utils";
+import { extractAuth, getAuthenticatedUserContext } from "../../middleware/auth.js";
+import { validateSchema, ReviewSubmissionSchema, ReviewAppealSchema, ReviewModerationSchema, AdminVerdictSchema } from "../../src/validation.js";
 import { readJsonBody, InvalidJsonError, BodyTooLargeError } from "../../src/request.js";
 import { badRequest, notFound, unauthorized, forbidden, sendApiError } from "../../src/errors.js";
 import { Merchant, Product, Review, ReviewAppeal, PaymentRecord } from "../../src/models/index.js";
+import {
+  hasReviewModerationRole as rolesGrantModeration,
+  applyVerdict,
+} from "./reviewModeration.js";
 
 const log = createLogger("gateway:reviews", process.env.LOG_LEVEL ?? "info");
+
+function hasReviewModerationRole(req: IncomingMessage): boolean {
+  return rolesGrantModeration(getAuthenticatedUserContext(req)?.roles);
+}
 
 /**
  * Emit reputation.review_added event
@@ -25,15 +33,16 @@ async function emitReviewAddedEvent(review: Review): Promise<void> {
 }
 
 /**
- * Emit audit event for moderation decisions
+ * Emit a structured moderation log entry. Persistent audit records are written
+ * by `applyVerdict`/`recordModerationVerdict` in reviewModeration.ts.
  */
-async function emitModerationAuditLog(
+function emitModerationAuditLog(
   appealId: string,
   reviewId: string,
   moderatorId: string,
   decision: "approved" | "rejected",
   notes?: string,
-): Promise<void> {
+): void {
   log.info("Review moderation audit", {
     appealId,
     reviewId,
@@ -353,13 +362,22 @@ export async function listAppealsHandler(
       return;
     }
 
-    // In a real system, verify user has admin role
-    // For now, just check authentication
+    if (!hasReviewModerationRole(req)) {
+      forbidden(res, "Admin or moderator role required", req);
+      return;
+    }
+
     const url = new URL(req.url ?? "", `http://${req.headers.host ?? "localhost"}`);
     const status = url.searchParams.get("status");
 
+    const VALID_STATUSES = ["pending_review", "approved", "rejected"];
+    if (status && !VALID_STATUSES.includes(status)) {
+      badRequest(res, `status must be one of: ${VALID_STATUSES.join(", ")}`, req);
+      return;
+    }
+
     const whereClause: Record<string, unknown> = {};
-    if (status && ["pending_review", "approved", "rejected"].includes(status)) {
+    if (status) {
       whereClause.status = status;
     }
 
@@ -402,6 +420,11 @@ export async function moderateAppealHandler(
     const auth = extractAuth(req);
     if (!auth.userId) {
       unauthorized(res, "Authentication required", req);
+      return;
+    }
+
+    if (!hasReviewModerationRole(req)) {
+      forbidden(res, "Admin or moderator role required", req);
       return;
     }
 
@@ -449,7 +472,7 @@ export async function moderateAppealHandler(
     }
 
     // Emit audit log
-    await emitModerationAuditLog(
+    emitModerationAuditLog(
       appealId,
       appeal.reviewId,
       auth.userId,
@@ -484,6 +507,84 @@ export async function moderateAppealHandler(
   }
 }
 
+export async function adminVerdictHandler(
+  req: IncomingMessage,
+  res: ServerResponse,
+  params: Record<string, string>,
+): Promise<void> {
+  try {
+    const auth = extractAuth(req);
+    if (!auth.userId) {
+      unauthorized(res, "Authentication required", req);
+      return;
+    }
+
+    if (!hasReviewModerationRole(req)) {
+      forbidden(res, "Admin or moderator role required", req);
+      return;
+    }
+
+    const appealId = params.appealId;
+    if (!appealId) {
+      badRequest(res, "appealId path parameter is required", req);
+      return;
+    }
+
+    const body = await readJsonBody(req);
+    const validation = validateSchema(AdminVerdictSchema, body);
+    if (!validation.valid) {
+      badRequest(res, "Invalid request body", req, validation.errors);
+      return;
+    }
+
+    const { verdict, adminNotes } = body;
+    const appeal = await ReviewAppeal.findByPk(appealId, {
+      include: [{ model: Review, as: "review" }],
+    });
+    if (!appeal) {
+      notFound(res, "Appeal not found", req);
+      return;
+    }
+
+    if (appeal.status !== "pending_review") {
+      sendApiError(res, 400, "APPEAL_ALREADY_RESOLVED",
+        "This appeal has already been moderated", req);
+      return;
+    }
+
+    await applyVerdict(appeal, verdict, auth.userId, adminNotes);
+
+    log.info("Admin review verdict applied", {
+      appealId,
+      reviewId: appeal.reviewId,
+      verdict,
+      operatorId: auth.userId,
+    });
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      data: {
+        ...formatAppealResponse(appeal),
+        verdict,
+        adminNotes,
+      },
+      error: null,
+    }));
+  } catch (err: any) {
+    if (err instanceof InvalidJsonError || err instanceof BodyTooLargeError) {
+      badRequest(res, err.message, req);
+      return;
+    }
+    log.error("Failed to apply admin verdict", {
+      error: err instanceof Error ? err.message : String(err),
+      appealId: params.appealId,
+      userId: extractAuth(req).userId,
+    });
+    sendApiError(res, 500, "ADMIN_VERDICT_FAILED",
+      err instanceof Error ? err.message : "Failed to apply admin verdict", req);
+  }
+}
+
 export function registerReviewRoutes(): Route[] {
   return [
     // Review submission (public)
@@ -496,5 +597,6 @@ export function registerReviewRoutes(): Route[] {
     // Admin moderation
     route("GET", "/api/v1/admin/reviews/appeals", listAppealsHandler),
     route("PATCH", "/api/v1/admin/reviews/appeals/:appealId", moderateAppealHandler),
+    route("POST", "/api/v1/admin/reviews/appeals/:appealId/verdict", adminVerdictHandler),
   ];
 }

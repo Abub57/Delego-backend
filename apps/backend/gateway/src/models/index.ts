@@ -13,6 +13,8 @@ import { Product } from "./Product.js";
 import { ProductVariant } from "./ProductVariant.js";
 import { Review } from "./Review.js";
 import { ReviewAppeal } from "./ReviewAppeal.js";
+import { ReviewModerationAuditLog } from "./ReviewModerationAuditLog.js";
+export type { ReviewModerationVerdict } from "./ReviewModerationAuditLog.js";
 import { DeliveryEvidence } from "./DeliveryEvidence.js";
 import { PaymentRecord } from "./PaymentRecord.js";
 import { Merchant } from "./Merchant.js";
@@ -81,6 +83,10 @@ ReviewAppeal.belongsTo(Review, { foreignKey: "reviewId", as: "review" });
 Merchant.hasMany(ReviewAppeal, { foreignKey: "merchantId", as: "appeals" });
 ReviewAppeal.belongsTo(Merchant, { foreignKey: "merchantId", as: "merchant" });
 
+// ReviewAppeal <-> ReviewModerationAuditLog (One-to-Many) — Issue #520
+ReviewAppeal.hasMany(ReviewModerationAuditLog, { foreignKey: "appealId", as: "auditLogs" });
+ReviewModerationAuditLog.belongsTo(ReviewAppeal, { foreignKey: "appealId", as: "appeal" });
+
 // PaymentRecord associations (for review buyer verification)
 PaymentRecord.hasMany(Review, { foreignKey: "orderId", targetKey: "orderId", as: "reviews" } as HasManyOptions);
 Review.belongsTo(PaymentRecord, { foreignKey: "orderId", targetKey: "orderId", as: "payment" });
@@ -100,6 +106,7 @@ export {
   ProductVariant,
   Review,
   ReviewAppeal,
+  ReviewModerationAuditLog,
   DeliveryEvidence,
   PaymentRecord,
   Merchant,
