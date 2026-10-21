@@ -10,30 +10,48 @@ export {
   OpenAIClient,
   AnthropicClient,
   GeminiClient,
+  FailoverLLMClient,
   createLLMClient,
   createDefaultLLMClient,
+  createFailoverLLMClient,
+  resolveFallbackChain,
 } from "./llm/index.js";
 export type {
   LLMClient,
   LLMRequestOptions,
   LLMResponse,
   LLMProviderName,
+  LLMProviderMetrics,
   LLMToolDefinition,
   LLMToolCallResponse,
+  LlmProvider,
+  LlmRequestOptions,
 } from "./llm/index.js";
 
 // Issue #262: Tool execution registry
+// Issue #362: Tool call argument sanitization and type coercion
 export {
   ToolRegistry,
   ToolValidationError,
   ToolPermissionError,
   ToolTimeoutError,
+  UnknownToolError,
+  sanitizeToolCall,
+  assertSanitizedToolCall,
+  sanitizeToolCalls,
+  buildSelfCorrectionPrompt,
+  ToolArgumentSanitizationError,
 } from "./tools/index.js";
 export type {
   AgentTool,
   AgentContext,
   AgentPermissionScope,
   ToolAuditEntry,
+  ValidatedToolCall,
+  RawToolCall,
+  RejectedToolCall,
+  ToolCallSanitizationResult,
+  SanitizationOptions,
 } from "./tools/index.js";
 
 const SERVICE_NAME = "agents";

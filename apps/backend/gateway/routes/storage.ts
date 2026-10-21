@@ -5,11 +5,11 @@
  * and dispute evidence directly to Cloudflare R2 / AWS S3.
  */
 
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Route, RouteHandler } from "@delegolabs/utils";
 import { json, createLogger, route } from "@delegolabs/utils";
 import { generatePresignedUrl, checkStorageConfig } from "../src/storage/index.js";
 import { readJsonBody } from "../src/request.js";
+import { guardPermission } from "../middleware/requirePermission.js";
 import type { PresignedUrlRequest, PresignedUrlResponse } from "../src/storage/index.js";
 
 const log = createLogger("gateway:storage", process.env.LOG_LEVEL ?? "info");
@@ -71,8 +71,13 @@ export const generatePresignedUrlHandler: RouteHandler = async (req, res) => {
 
   const request = body as PresignedUrlRequest;
 
+  const filename = request.fileName || request.filename;
+  const contentType = request.expectedMimeType || request.contentType;
+  const fileSizeBytes = request.contentLength !== undefined ? request.contentLength : request.fileSizeBytes;
+  const purpose = request.purpose || "dispute_evidence";
+
   // Validate required fields
-  if (!request.filename || typeof request.filename !== "string") {
+  if (!filename || typeof filename !== "string") {
     json(res, 400, {
       data: null,
       error: { code: "INVALID_REQUEST", message: "filename is required and must be a string" },
@@ -80,7 +85,7 @@ export const generatePresignedUrlHandler: RouteHandler = async (req, res) => {
     return;
   }
 
-  if (!request.contentType || typeof request.contentType !== "string") {
+  if (!contentType || typeof contentType !== "string") {
     json(res, 400, {
       data: null,
       error: { code: "INVALID_REQUEST", message: "contentType is required and must be a string" },
@@ -88,7 +93,7 @@ export const generatePresignedUrlHandler: RouteHandler = async (req, res) => {
     return;
   }
 
-  if (typeof request.fileSizeBytes !== "number" || request.fileSizeBytes < 0) {
+  if (typeof fileSizeBytes !== "number" || fileSizeBytes < 0) {
     json(res, 400, {
       data: null,
       error: { code: "INVALID_REQUEST", message: "fileSizeBytes is required and must be a non-negative number" },
@@ -96,16 +101,21 @@ export const generatePresignedUrlHandler: RouteHandler = async (req, res) => {
     return;
   }
 
-  if (!request.purpose || typeof request.purpose !== "string") {
+  if (purpose && typeof purpose !== "string") {
     json(res, 400, {
       data: null,
-      error: { code: "INVALID_REQUEST", message: "purpose is required and must be a string" },
+      error: { code: "INVALID_REQUEST", message: "purpose must be a string" },
     });
     return;
   }
 
   try {
-    const response = await generatePresignedUrl(request);
+    const response = await generatePresignedUrl({
+      filename,
+      contentType,
+      fileSizeBytes,
+      purpose,
+    });
     json(res, 201, {
       data: response,
       error: null,
@@ -135,6 +145,14 @@ export const generatePresignedUrlHandler: RouteHandler = async (req, res) => {
         return;
       }
 
+      if (error.includes("File extension") || error.includes("file extension")) {
+        json(res, 400, {
+          data: null,
+          error: { code: "INVALID_FILE_EXTENSION", message: error },
+        });
+        return;
+      }
+
       if (error.includes("filename cannot contain path separators")) {
         json(res, 400, {
           data: null,
@@ -152,11 +170,94 @@ export const generatePresignedUrlHandler: RouteHandler = async (req, res) => {
 };
 
 /**
+ * Validate uploaded file handler.
+ *
+ * POST /api/v1/storage/validate-upload
+ */
+export const validateUploadHandler: RouteHandler = async (req, res) => {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    json(res, 400, {
+      data: null,
+      error: { code: "INVALID_JSON", message: "Invalid JSON body" },
+    });
+    return;
+  }
+
+  if (!body || typeof body !== "object") {
+    json(res, 400, {
+      data: null,
+      error: { code: "INVALID_REQUEST", message: "Request body is required" },
+    });
+    return;
+  }
+
+  const { fileKey, expectedMimeType, autoDeleteOnMismatch } = body as {
+    fileKey?: string;
+    expectedMimeType?: string;
+    autoDeleteOnMismatch?: boolean;
+  };
+
+  if (!fileKey || typeof fileKey !== "string") {
+    json(res, 400, {
+      data: null,
+      error: { code: "INVALID_REQUEST", message: "fileKey is required and must be a string" },
+    });
+    return;
+  }
+
+  if (!expectedMimeType || typeof expectedMimeType !== "string") {
+    json(res, 400, {
+      data: null,
+      error: { code: "INVALID_REQUEST", message: "expectedMimeType is required and must be a string" },
+    });
+    return;
+  }
+
+  try {
+    const { validateUploadedFile } = await import("../src/storage/index.js");
+    const result = await validateUploadedFile({
+      fileKey,
+      expectedMimeType: expectedMimeType as any,
+      autoDeleteOnMismatch: autoDeleteOnMismatch !== false,
+    });
+
+    if (!result.isSafe) {
+      json(res, 422, {
+        data: result,
+        error: {
+          code: "FILE_VALIDATION_FAILED",
+          message: result.error || "File validation failed",
+        },
+      });
+      return;
+    }
+
+    json(res, 200, {
+      data: result,
+      error: null,
+    });
+  } catch (err) {
+    log.error("Error running post-upload validation", {
+      fileKey,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    json(res, 500, {
+      data: null,
+      error: { code: "VALIDATION_ERROR", message: err instanceof Error ? err.message : "Validation error" },
+    });
+  }
+};
+
+/**
  * Register storage routes.
  */
 export function registerStorageRoutes(): Route[] {
   return [
     route("GET", "/api/v1/storage/status", storageStatusHandler),
-    route("POST", "/api/v1/storage/presigned-url", generatePresignedUrlHandler),
+    route("POST", "/api/v1/storage/presigned-url", guardPermission("catalog:write", generatePresignedUrlHandler)),
+    route("POST", "/api/v1/storage/validate-upload", validateUploadHandler),
   ];
 }

@@ -1,5 +1,5 @@
 import type { ApiResponse } from "@delegolabs/types";
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, tracedFetch } from "@delegolabs/utils";
 
 const log = createLogger("orchestrator:order-lookup", process.env.LOG_LEVEL ?? "info");
 
@@ -48,7 +48,7 @@ export function createHttpOrderLookupClient(
 
       let response: Response;
       try {
-        response = await fetch(url, {
+        response = await tracedFetch(url, {
           method: "GET",
           headers: { Accept: "application/json" },
         });

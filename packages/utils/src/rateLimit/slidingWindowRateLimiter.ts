@@ -5,7 +5,9 @@
  * = timestamp), old entries outside the window are trimmed, and the
  * decision is made atomically via a Lua script so concurrent requests
  * across multiple service instances see a consistent count — a plain
- * GET-then-SET counter would race under concurrent load.
+ * GET-then-SET counter would race under concurrent load. A tier's optional
+ * `burstAllowance` admits a bounded surplus above `maxRequests` before the
+ * request is denied; the advertised `X-RateLimit-Limit` stays `maxRequests`.
  *
  * Redis key schema:
  *   ratelimit:{tier}:{key} → ZSET of request timestamps (ms), scored by timestamp
@@ -30,6 +32,13 @@ export interface RateLimitTier {
   tier: string;
   windowMs: number;
   maxRequests: number;
+  /**
+   * Extra requests admitted above `maxRequests` before the tier throttles.
+   * Burst requests are counted in the same sliding window, so a caller who
+   * exhausts both the steady-state quota and the burst is blocked until the
+   * oldest in-window request ages out. Defaults to 0 (no burst).
+   */
+  burstAllowance?: number;
 }
 
 export interface RateLimitRule {
@@ -64,14 +73,15 @@ local key = KEYS[1]
 local now = tonumber(ARGV[1])
 local windowMs = tonumber(ARGV[2])
 local maxRequests = tonumber(ARGV[3])
-local cost = tonumber(ARGV[4])
+local burstAllowance = tonumber(ARGV[4])
+local cost = tonumber(ARGV[5])
 local windowStart = now - windowMs
 
 redis.call('ZREMRANGEBYSCORE', key, '-inf', windowStart)
 local count = redis.call('ZCARD', key)
 
 local allowed = 0
-if count + cost <= maxRequests then
+if count + cost <= maxRequests + burstAllowance then
   for i = 1, cost do
     redis.call('ZADD', key, now, now .. ':' .. i .. ':' .. math.random())
   end
@@ -115,6 +125,7 @@ export class SlidingWindowRateLimiter {
     }
 
     const cost = check.cost ?? 1;
+    const burstAllowance = tierConfig.burstAllowance ?? 0;
     const now = Date.now();
     const redisKey = `ratelimit:${check.tier}:${rule.keyPrefix}:${check.key}`;
 
@@ -125,10 +136,13 @@ export class SlidingWindowRateLimiter {
       now,
       tierConfig.windowMs,
       tierConfig.maxRequests,
+      burstAllowance,
       cost,
     );
 
     const allowed = allowedRaw === 1;
+    // `remaining` tracks the steady-state quota only; while a caller is inside
+    // its burst allowance this floors at 0 even though requests still succeed.
     const remaining = Math.max(0, tierConfig.maxRequests - count);
     const resetAt = oldestScore + tierConfig.windowMs;
     const retryAfterMs = allowed ? undefined : Math.max(0, resetAt - now);

@@ -9,7 +9,7 @@
 
 import { DateTime } from "luxon";
 
-export type NotificationChannel = "email" | "push" | "in_app" | "sms";
+export type NotificationChannel = "email" | "push" | "in_app" | "sms" | "whatsapp";
 
 export type ChannelFrequency =
   | "immediate"
@@ -79,6 +79,7 @@ export const NOTIFICATION_CHANNELS: readonly NotificationChannel[] = [
   "push",
   "in_app",
   "sms",
+  "whatsapp",
 ];
 
 /** Built-in categories shared with in_app_notifications.category. */
@@ -101,7 +102,7 @@ export const DEFAULT_CHANNEL_PREFERENCE: ChannelPreference = {
 
 export const DEFAULT_CATEGORY_PREFERENCE: CategoryPreference = {
   enabled: true,
-  channels: ["email", "push", "in_app", "sms"],
+  channels: ["email", "push", "in_app", "sms", "whatsapp"],
   frequency: DEFAULT_CATEGORY_FREQUENCY,
   criticalOnly: false,
 };
@@ -141,6 +142,43 @@ export function getDefaultNotificationPreference(
     quietHours: JSON.parse(JSON.stringify(DEFAULT_QUIET_HOURS)) as QuietHours,
     globalUnsubscribe: false,
     updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Bring a stored preference document saved before the `whatsapp` channel
+ * existed (#300) up to date. Such a document has no `channels.whatsapp` entry
+ * and its category channel lists never mention whatsapp, which would otherwise
+ * block WhatsApp for every user who ever saved preferences. For those legacy
+ * documents WhatsApp follows the user's SMS choices: the channel entry copies
+ * `channels.sms`, and whatsapp joins every category list that includes sms.
+ * Documents that already have a `whatsapp` entry are returned unchanged.
+ */
+export function upgradeLegacyWhatsappPreference(
+  prefs: NotificationPreference
+): NotificationPreference {
+  // Stored JSON may predate a channel, so don't trust the full Record type here.
+  const storedChannels = prefs.channels as
+    | Partial<Record<NotificationChannel, ChannelPreference>>
+    | undefined;
+  if (storedChannels?.whatsapp) return prefs;
+
+  const smsChannel = storedChannels?.sms ?? getDefaultChannelPreference();
+  const categories: Record<string, CategoryPreference> = {};
+  for (const [key, category] of Object.entries(prefs.categories ?? {})) {
+    categories[key] =
+      category.channels.includes("sms") && !category.channels.includes("whatsapp")
+        ? { ...category, channels: [...category.channels, "whatsapp"] }
+        : category;
+  }
+
+  return {
+    ...prefs,
+    channels: {
+      ...storedChannels,
+      whatsapp: JSON.parse(JSON.stringify(smsChannel)) as ChannelPreference,
+    } as Record<NotificationChannel, ChannelPreference>,
+    categories,
   };
 }
 

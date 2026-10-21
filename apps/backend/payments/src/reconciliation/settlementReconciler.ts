@@ -3,7 +3,7 @@
  * Periodically compares database settlement records against on-chain escrow state.
  * Detects and resolves discrepancies from network failures or missed events.
  */
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, tracedFetch } from "@delegolabs/utils";
 import { Pool } from "pg";
 
 const log = createLogger("payments:settlement-reconciler", process.env.LOG_LEVEL ?? "info");
@@ -54,7 +54,7 @@ async function fetchOnChainEscrowStatus(
 ): Promise<"funded" | "released" | "refunded" | "not_found"> {
     const walletUrl = process.env.WALLET_SERVICE_URL ?? "http://localhost:3012";
     try {
-        const res = await fetch(`${walletUrl}/escrow/${encodeURIComponent(escrowId)}/status`, {
+        const res = await tracedFetch(`${walletUrl}/escrow/${encodeURIComponent(escrowId)}/status`, {
             method: "GET",
             headers: { "Content-Type": "application/json" },
         });

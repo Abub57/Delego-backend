@@ -1,14 +1,21 @@
 /**
  * @delegolabs/payments — Entry point
  * #68 Dispute Resolution Arbiter Multi-Sig
+ * #374 Enterprise Disbursement Multi-Sig Quorum
  */
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, tracedFetch } from "@delegolabs/utils";
 import { startHttpServer, corsMiddleware, securityHeadersMiddleware } from "@delegolabs/utils";
 import { registerRoutes } from "./routes.js";
 import { startReconciliationScheduler } from "./reconciliation/settlementReconciler.js";
 import { startSlaEscalationScheduler } from "./disputes/slaEscalation.js";
 import { startSubscriptionBillingScheduler } from "./subscriptions/billingScheduler.js";
+import { startAutoReleaseWorker, stopAutoReleaseWorker } from "./workers/autoRelease.js";
+import { enablePostgresDisputeStore } from "./disputes/disputeStore.js";
 import { startTimeoutRefundScheduler } from "./workers/timeoutRefund.js";
+import { startShippingExceptionScheduler } from "./shipping/exceptionDetector.js";
+import { startCarrierTrackingWorker } from "./webhooks/carrierWorker.js";
+import { startCarrierPollingScheduler } from "./workers/carrierPolling.js";
+import { startRateRefreshScheduler } from "./exchangeRate/index.js";
 
 export { escrowCoordinator } from "./escrowCoordinator/index.js";
 export { reconcileSettlements, startReconciliationScheduler } from "./reconciliation/settlementReconciler.js";
@@ -42,8 +49,10 @@ export {
   openDispute,
   submitEvidence,
   submitMediationDecision,
+  submitMerchantResponse,
 } from "./disputes/mediation.js";
 export { executePartialRefund } from "./disputes/partialRefund.js";
+export { submitMerchantResponse } from "./disputes/index.js";
 export { startSlaEscalationScheduler, findAndEscalateBreachedDisputes } from "./disputes/slaEscalation.js";
 export type {
   Dispute,
@@ -91,6 +100,13 @@ export {
 // ─── #45 Escrow Auto-Release on Delivery Confirmation ──────────────────────
 
 export { adminOverrideRelease, executeAutoRelease, handleDeliveryConfirmation } from "./autoRelease/service.js";
+
+// ─── #369 Automated Oracle Delivery Receipt Signing ────────────────────────
+
+export { signDeliveryReceipt, verifyDeliveryReceipt } from "./oracle/service.js";
+export { getOracleSigner, getOracleSignerConfig, resetOracleSigner } from "./oracle/config.js";
+export { registerOracleRoutes } from "./oracle/routes.js";
+export type { OracleDeliveryReceiptInput, OracleSignedDeliveryReceipt, OracleSubmitReceiptResult } from "./oracle/types.js";
 export { getAutoReleaseConfig, setAutoReleaseConfig } from "./autoRelease/configStore.js";
 export { verifyWebhookSignature } from "./autoRelease/hmac.js";
 export type {
@@ -106,6 +122,34 @@ export type {
 } from "./autoRelease/types.js";
 export { EscrowDisputedError, EscrowNotReleasableError } from "./autoRelease/types.js";
 
+// ─── #295 Shipping Exception & Lost Package Detector ───────────────────────
+
+export {
+  addBusinessDays,
+  businessDaysBetween,
+  classifyAnomaly,
+  detectShippingExceptions,
+  startShippingExceptionScheduler,
+} from "./shipping/exceptionDetector.js";
+export { notifyShippingAnomaly, SHIPPING_ANOMALY_EVENT } from "./shipping/notifications.js";
+export type { ShippingAnomalyNotification } from "./shipping/notifications.js";
+export {
+  getShipmentStore,
+  InMemoryShipmentStore,
+  resetShipmentStore,
+  setShipmentStore,
+} from "./shipping/shipmentStore.js";
+export type { ShipmentAnomalyFlag, ShipmentStore } from "./shipping/shipmentStore.js";
+export type {
+  InTransitShipment,
+  ShipmentTrackingStatus,
+  ShipmentTrackingUpdate,
+  ShippingAnomalyReason,
+  ShippingAnomalyRecord,
+  ShippingDetectionConfig,
+  ShippingScanResult,
+} from "./shipping/types.js";
+
 const SERVICE_NAME = "payments";
 const DEFAULT_PORT = 3014;
 
@@ -113,6 +157,9 @@ const nodeEnv = process.env.NODE_ENV ?? "development";
 const logLevel = process.env.LOG_LEVEL ?? "info";
 const log = createLogger(SERVICE_NAME, logLevel);
 const port = Number(process.env.PAYMENTS_PORT ?? DEFAULT_PORT);
+
+if (process.env.DATABASE_URL) enablePostgresDisputeStore();
+startAutoReleaseWorker();
 
 log.info("Starting service", { port, nodeEnv });
 
@@ -135,6 +182,7 @@ if (process.env.ENABLE_SETTLEMENT_RECONCILIATION !== "false") {
 
 async function gracefulShutdown(signal: NodeJS.Signals): Promise<void> {
   log.info("Received shutdown signal", { signal });
+  await stopAutoReleaseWorker();
 
   if (stopScheduler) {
     try {
@@ -184,6 +232,36 @@ if (process.env.ENABLE_SUBSCRIPTION_BILLING !== "false") {
   });
 }
 
+// ─── #291 Carrier Tracking Webhook Receiver ─────────────────────────────────
+
+export {
+  normalizeEasyPostEvent,
+  validateEasyPostPayload,
+  getCarrierWebhookSecret,
+  extractCarrierSignature,
+} from "./webhooks/carrierWebhook.js";
+export type {
+  CarrierTrackingStatus,
+  EasyPostTrackingDetail,
+  EasyPostTrackingWebhook,
+  NormalizedCarrierEvent,
+} from "./webhooks/carrierWebhook.js";
+export {
+  CARRIER_TRACKING_QUEUE_NAME,
+  enqueueCarrierEvent,
+  registerCarrierEventProcessor,
+} from "./webhooks/carrierQueue.js";
+export { processCarrierEvent, startCarrierTrackingWorker } from "./webhooks/carrierWorker.js";
+
+if (process.env.ENABLE_CARRIER_TRACKING_WORKER !== "false") {
+  const carrierWorker = startCarrierTrackingWorker();
+
+  process.on("SIGTERM", () => {
+    log.info("SIGTERM received; stopping carrier tracking worker");
+    carrierWorker.stop();
+  });
+}
+
 // ─── #297 Timeout Refund Worker for Stalled Escrows ─────────────────────────
 
 if (process.env.ENABLE_TIMEOUT_REFUND_WORKER !== "false") {
@@ -192,6 +270,38 @@ if (process.env.ENABLE_TIMEOUT_REFUND_WORKER !== "false") {
   process.on("SIGTERM", () => {
     log.info("SIGTERM received; stopping timeout refund scheduler");
     timeoutRefundScheduler.stop();
+  });
+}
+// ─── #295 Shipping Exception & Lost Package Detector ───────────────────────
+
+if (process.env.ENABLE_SHIPPING_EXCEPTION_SCAN !== "false") {
+  const stopShippingExceptionScheduler = startShippingExceptionScheduler();
+
+  process.on("SIGTERM", () => {
+    log.info("SIGTERM received; stopping shipping exception scheduler");
+    stopShippingExceptionScheduler();
+  });
+}
+
+// ─── #384 Carrier Tracking Polling Fallback ──────────────────────────────────
+
+if (process.env.ENABLE_CARRIER_POLLING !== "false") {
+  const carrierPollingScheduler = startCarrierPollingScheduler();
+
+  process.on("SIGTERM", () => {
+    log.info("SIGTERM received; stopping carrier polling scheduler");
+    carrierPollingScheduler.stop();
+  });
+}
+
+// ─── #379 Automated Currency Conversion Rate Cache ──────────────────────────
+
+if (process.env.ENABLE_EXCHANGE_RATE_CACHE !== "false") {
+  const rateRefreshScheduler = startRateRefreshScheduler();
+
+  process.on("SIGTERM", () => {
+    log.info("SIGTERM received; stopping exchange rate refresh scheduler");
+    rateRefreshScheduler.stop();
   });
 }
 
@@ -295,7 +405,7 @@ async function submitDisputeResolution(state: DisputeResolutionState): Promise<v
 
   try {
     const walletUrl = process.env.WALLET_SERVICE_URL ?? "http://localhost:3012";
-    const res = await fetch(`${walletUrl}/escrow/${encodeURIComponent(state.escrowId)}/dispute-resolve`, {
+    const res = await tracedFetch(`${walletUrl}/escrow/${encodeURIComponent(state.escrowId)}/dispute-resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -331,3 +441,24 @@ function computePayloadHash(escrowId: string, arbiter: string, signature: string
   }
   return (h >>> 0).toString(16).padStart(8, "0");
 }
+
+// ─── #374 Enterprise Disbursement Multi-Sig Quorum ────────────────────────────
+
+export {
+  createDisbursementApproval,
+  collectOfficerSignature,
+  getDisbursementState,
+  submitDisbursementApproval,
+  listDisbursements,
+  expireStaleDisbursements,
+  DisbursementNotFoundError,
+  OfficerNotAuthorizedError,
+  DuplicateSignatureError,
+  InvalidSignatureError,
+  DisbursementClosedError,
+  type DisbursementState,
+  type DisbursementStatus,
+  type OfficerSignature,
+  type CreateDisbursementApprovalInput,
+  type SubmitOfficerSignatureInput,
+} from "./disbursementApproval.js";

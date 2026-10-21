@@ -29,6 +29,8 @@ export interface DepositEscrowParams {
   buyerAddress: string;
   sellerAddress: string;
   orderId?: string;
+  /** Authenticated user identity propagated by the service route, never public body data. */
+  userId?: string;
 }
 
 export interface ReleaseEscrowParams {

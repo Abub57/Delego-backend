@@ -57,7 +57,25 @@ The incremental migrations are:
 | `036_notification_preference_center.sql` | Notification preference center: org defaults, JSONB preference documents, and migration history (#115) |
 | `037_multi_currency.sql` | Multi-currency payments, FX rates, and currency settlements (#112) |
 | `038_column_encryption.sql` | Column-level encryption for PII at rest: data-encryption-key version registry and append-only key-access audit log (#68) |
-| `040_custom_domain_certificates.sql` | Merchant custom-domain CNAME verification queue and AES-256-GCM encrypted TLS certificate storage (#597) |
+| `039_user_agent_memories.sql` | Long-term user preference memory with pgvector embeddings and IVFFLAT index (#266) |
+| `040_passkey_credentials.sql` | WebAuthn passkey credentials (public key, signature counter, transports) and single-use ceremony challenges (#367) |
+| `043_spend_metrics.sql` | Daily/monthly completed escrow spend summaries with user/date covering indexes (#306); paired rollback drops both summaries |
+| `049_custom_domain_certificates.sql` | Merchant custom-domain CNAME verification queue and AES-256-GCM encrypted TLS certificate storage (#597) |
+
+### Passkey / WebAuthn configuration (#367)
+
+`040_passkey_credentials.sql` backs the passkey ceremonies. The gateway reads
+its relying-party settings from the environment; there are no safe defaults for
+the RP ID or origins, so both must be set explicitly:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `WEBAUTHN_RP_ID` | yes | Registrable domain of the relying party (e.g. `passkeys.delego.io`) |
+| `WEBAUTHN_ORIGINS` | yes | Comma-separated list of allowed origins |
+| `WEBAUTHN_RP_NAME` | no | User-visible name shown by the authenticator (default `Delego`) |
+| `WEBAUTHN_USER_VERIFICATION` | no | `required` (default), `preferred` or `discouraged` |
+| `WEBAUTHN_ENFORCE_COUNTER` | no | Set to `false` only for synced passkeys that report a constant counter; this forfeits replay detection |
+| `WEBAUTHN_CHALLENGE_TTL_MS` | no | Challenge lifetime in ms (default 300000) |
 
 ## Naming rules
 

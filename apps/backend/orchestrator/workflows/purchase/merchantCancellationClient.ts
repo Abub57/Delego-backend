@@ -8,7 +8,7 @@
  * tests never depend on one being reachable.
  */
 import type { ApiResponse } from "@delegolabs/types";
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, tracedFetch } from "@delegolabs/utils";
 
 const log = createLogger("orchestrator:merchant-cancellation-client", process.env.LOG_LEVEL ?? "info");
 
@@ -46,7 +46,7 @@ export function createHttpMerchantCancellationClient(
 
       let response: Response;
       try {
-        response = await fetch(url, {
+        response = await tracedFetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
           body: JSON.stringify({ reasonCode }),

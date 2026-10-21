@@ -18,6 +18,9 @@ export interface PartialRefundRequest {
 
 export type DisputeStatus = "open" | "evidence_collection" | "negotiation" | "merchant_responded" | "decided" | "resolved";
 
+/** Arbitration tier a dispute is assigned to; stalled disputes move tier1 → senior. */
+export type DisputeTier = "tier1" | "senior";
+
 export type ResolutionType = "full_refund" | "partial_refund" | "release_to_seller" | "split";
 
 export interface DisputeEvidenceEntry {
@@ -49,6 +52,10 @@ export interface Dispute {
   createdAt: string;
   updatedAt: string;
   slaDeadline: string;
+  /** Current arbitration tier; unset is treated as `tier1`. */
+  escalationTier?: DisputeTier;
+  /** When the dispute was escalated to its current tier. */
+  escalationEscalatedAt?: string;
   resolution?: DisputeResolution;
 }
 

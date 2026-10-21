@@ -277,6 +277,35 @@ const HealthSchema = {
 };
 
 // ---------------------------------------------------------------------------
+// Order schemas
+// ---------------------------------------------------------------------------
+
+const RejectOrderRequestBody = {
+  type: "object",
+  properties: {
+    reason: { type: "string", description: "Human-readable rejection reason" },
+    reasonCode: {
+      type: "string",
+      enum: ["out_of_stock", "pricing_error", "buyer_unresponsive", "fraud_suspected", "other"],
+      description: "Machine-readable rejection reason code",
+    },
+    internalNote: { type: "string", description: "Optional internal note for audit purposes" },
+  },
+  required: ["reason", "reasonCode"],
+  additionalProperties: false,
+};
+
+const RejectOrderResponse = ApiResponse({
+  type: "object",
+  properties: {
+    orderId: { type: "string", format: "uuid" },
+    status: { type: "string", enum: ["rejected"] },
+    rejectedAt: { type: "string", format: "date-time" },
+    notifiedBuyer: { type: "boolean", description: "Whether the buyer was notified of the rejection" },
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Full OpenAPI 3.0 Document
 // ---------------------------------------------------------------------------
 
@@ -962,6 +991,44 @@ Rate limit headers are included in all responses:
         },
       },
     },
+    "/api/v1/orders/{id}/reject": {
+      post: {
+        tags: ["Orders"],
+        summary: "Reject order",
+        description: "Rejects a pending order with a structured reason code and optional internal note. This action is permanent and triggers buyer notification.",
+        operationId: "rejectOrder",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" }, description: "Order ID to reject" },
+        ],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: RejectOrderRequestBody } },
+        },
+        responses: {
+          "200": {
+            description: "Order rejected successfully",
+            content: { "application/json": { schema: RejectOrderResponse } },
+          },
+          "400": {
+            description: "Validation error or order not in rejectable state",
+            content: { "application/json": { schema: ApiResponse(null) } },
+          },
+          "401": {
+            description: "Not authenticated",
+            content: { "application/json": { schema: ApiResponse(null) } },
+          },
+          "403": {
+            description: "Forbidden - insufficient permissions to reject this order",
+            content: { "application/json": { schema: ApiResponse(null) } },
+          },
+          "404": {
+            description: "Order not found",
+            content: { "application/json": { schema: ApiResponse(null) } },
+          },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
@@ -979,6 +1046,7 @@ Rate limit headers are included in all responses:
     { name: "Delegations", description: "Delegation CRUD and policy management" },
     { name: "Wallets", description: "Wallet operations, payments, HD key derivation, and HSM health" },
     { name: "Fees", description: "Dynamic transaction fee estimation" },
+    { name: "Orders", description: "Order management and lifecycle operations" },
     { name: "Admin", description: "Administrative endpoints (admin role required)" },
   ],
 };

@@ -24,7 +24,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "echo 'TODO: add eslint'",
     "test": "vitest run",
-    "ts-benchmark:encryption": "node --experimental-specifier-resolution=node dist/encryption/benchmark.js"
+    "ts-benchmark:encryption": "node --experimental-specifier-resolution=node dist/encryption/benchmark.js",
+    "ts-benchmark:log-chunks": "node --experimental-specifier-resolution=node dist/logChunkCompressionBenchmark.js"
   },
   "dependencies": {
     "@delegolabs/types": "workspace:*",

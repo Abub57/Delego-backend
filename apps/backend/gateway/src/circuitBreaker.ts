@@ -1,3 +1,5 @@
+import { fetchWithCorrelation } from "../middleware/correlation.js";
+
 /**
  * Circuit Breaker for downstream service calls (Issue #364)
  *
@@ -342,7 +344,7 @@ export async function healthCheckService(service: DownstreamService): Promise<He
   try {
     await breaker.execute(async () => {
       const url = getServiceHealthUrl(service);
-      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      const res = await fetchWithCorrelation(url, { signal: AbortSignal.timeout(3000) });
       if (!res.ok) throw new Error(`Health check returned ${res.status}`);
     });
     return { service, healthy: true, latencyMs: Date.now() - start };

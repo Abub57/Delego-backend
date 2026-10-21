@@ -9,7 +9,8 @@
     ".": "./dist/src/index.js",
     "./fee-estimator": {
       "types": "./dist/escrow/feeEstimator.d.ts",
-      "import": "./dist/escrow/feeEstimator.js"
+      "import": "./dist/escrow/feeEstimator.js",
+      "default": "./escrow/feeEstimator.ts"
     }
   },
   "scripts": {

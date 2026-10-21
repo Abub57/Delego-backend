@@ -32,7 +32,7 @@ import {
 } from "../queue/transactionDLQ.js";
 import { addTransactionToQueue } from "../queue/txQueue.js";
 import { createLogger } from "@delegolabs/utils";
-import type { TransactionRequest } from "@delegolabs/types";
+import type { TransactionRequest, DlqTriagePolicy } from "@delegolabs/types";
 
 const log = createLogger("wallet:admin:dlq", process.env.LOG_LEVEL ?? "info");
 
@@ -330,6 +330,78 @@ export function registerDLQAdminRoutes(): Route[] {
         json(res, 201, { data: entry, error: null });
       } catch (err: any) {
         log.error("POST DLQ add error", { error: err.message });
+        json(res, 500, {
+          data: null,
+          error: { code: "INTERNAL_ERROR", message: err.message },
+        });
+      }
+    }),
+
+    // Issue #363: Trigger DLQ triage on a job or entry
+    route("POST", "/admin/dlq/triage", async (req, res) => {
+      try {
+        const body = await readBody<{
+          jobId: string;
+          errorMessage: string;
+          errorCode?: string;
+          errorStack?: string;
+          failedAt?: string | number;
+          retryCount?: number;
+          payload?: unknown;
+          policy?: Partial<DlqTriagePolicy>;
+        }>(req);
+
+        if (!body.jobId || !body.errorMessage) {
+          json(res, 400, {
+            data: null,
+            error: {
+              code: "BAD_REQUEST",
+              message: "jobId and errorMessage are required",
+            },
+          });
+          return;
+        }
+
+        const { classifyErrorAndDecide, DEFAULT_TRANSIENT_PATTERNS } = await import("../queue/dlqClassificationEngine.js");
+        const { DlqSlackAlerter } = await import("../queue/dlqSlackAlerter.js");
+
+        const policy: DlqTriagePolicy = {
+          transientErrorPatterns: body.policy?.transientErrorPatterns ?? [...DEFAULT_TRANSIENT_PATTERNS],
+          maxAutomaticRetries: body.policy?.maxAutomaticRetries ?? 3,
+          slackWebhookUrl: body.policy?.slackWebhookUrl ?? process.env.DLQ_SLACK_WEBHOOK_URL ?? "",
+        };
+
+        const jobData = {
+          jobId: body.jobId,
+          errorMessage: body.errorMessage,
+          errorCode: body.errorCode,
+          errorStack: body.errorStack,
+          failedAt: body.failedAt ?? new Date().toISOString(),
+          retryCount: body.retryCount ?? 0,
+          payload: body.payload ?? {},
+        };
+
+        const classification = classifyErrorAndDecide(jobData, policy);
+        let alertSent = false;
+        if (classification.decision === "quarantine") {
+          const alerter = new DlqSlackAlerter(policy.slackWebhookUrl);
+          const alertResult = await alerter.sendAlert(jobData, classification.reason);
+          alertSent = alertResult.sent;
+        }
+
+        json(res, 200, {
+          data: {
+            jobId: body.jobId,
+            decision: classification.decision,
+            reason: classification.reason,
+            retryCount: jobData.retryCount,
+            nextRetryDelayMs: classification.retryDelayMs,
+            alertSent,
+          },
+          error: null,
+        });
+      } catch (err: any) {
+        log.error("POST DLQ triage error", { error: err.message });
         json(res, 500, {
           data: null,
           error: { code: "INTERNAL_ERROR", message: err.message },

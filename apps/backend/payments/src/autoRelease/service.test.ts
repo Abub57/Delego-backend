@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { escrowCoordinator } from "../escrowCoordinator/index.js";
+import { getDisputeStore, resetDisputeStore } from "../disputes/disputeStore.js";
 import { resetAutoReleaseConfigStore, setAutoReleaseConfig } from "./configStore.js";
 import { resetConfirmationTracker } from "./confirmationTracker.js";
 import { resetReleaseQueue, runDueReleaseJobs } from "./releaseQueue.js";
@@ -48,6 +49,7 @@ describe("escrow auto-release service", () => {
     resetAutoReleaseConfigStore();
     resetConfirmationTracker();
     resetReleaseQueue();
+    resetDisputeStore();
     vi.mocked(escrowCoordinator.getEscrowStatus).mockReset();
     vi.mocked(escrowCoordinator.releaseEscrow).mockReset();
   });
@@ -91,6 +93,22 @@ describe("escrow auto-release service", () => {
         orderId: "order-1",
         confirmedBy: "merchant-1",
         retryOptions: NO_SLEEP,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/disputed/i);
+      expect(escrowCoordinator.releaseEscrow).not.toHaveBeenCalled();
+    });
+
+    it("blocks release when a mediation dispute exists but the on-chain flag failed", async () => {
+      vi.mocked(escrowCoordinator.getEscrowStatus).mockResolvedValue(fundedStatus());
+      await getDisputeStore().create({
+        escrowId: "42", orderId: "order-1", initiatedBy: "buyer", reason: "not delivered",
+        slaDeadline: "2026-10-01T00:00:00Z",
+      });
+
+      const result = await executeAutoRelease({
+        escrowId: "42", orderId: "order-1", confirmedBy: "merchant-1", retryOptions: NO_SLEEP,
       });
 
       expect(result.success).toBe(false);

@@ -22,6 +22,8 @@
 
 import { createLogger } from "@delegolabs/utils";
 import { escrowCoordinator } from "../escrowCoordinator/index.js";
+import { getDisputeStore } from "../disputes/disputeStore.js";
+import { enqueueAutoRelease } from "../workers/autoRelease.js";
 import { getAutoReleaseCallerAddress, getEscrowContractId } from "../../escrow/config.js";
 import { getAutoReleaseConfig } from "./configStore.js";
 import { recordDeliveryConfirmation } from "./confirmationTracker.js";
@@ -167,6 +169,18 @@ export async function executeAutoRelease(params: ExecuteAutoReleaseParams): Prom
     return result;
   }
 
+  // The mediation record is authoritative even when its on-chain dispute
+  // flag failed. Check immediately before the transaction as well as in the
+  // delayed worker, so a dispute opened while the job was running still wins.
+  const activeDisputes = await getDisputeStore().findByEscrowId(escrowId);
+  if (activeDisputes.some((dispute) => dispute.status !== "resolved")) {
+    const result = failureResult(escrowId, statusCheck.amount, `Escrow ${escrowId} is disputed`);
+    await emitAutoReleaseEvent("release_failed", orderId, {
+      escrowId, orderId, confirmedBy, reason: result.error,
+    });
+    return result;
+  }
+
   const contractId = getEscrowContractId();
   const callerAddress = getAutoReleaseCallerAddress();
 
@@ -237,7 +251,8 @@ registerReleaseExecutor((job: ScheduledReleaseJob) =>
  * to 403/400 responses respectively.
  */
 export async function handleDeliveryConfirmation(
-  confirmation: DeliveryConfirmation
+  confirmation: DeliveryConfirmation,
+  verifiedSignature?: string
 ): Promise<AutoReleaseOutcome> {
   const { escrowId, orderId, confirmedBy } = confirmation;
 
@@ -256,6 +271,19 @@ export async function handleDeliveryConfirmation(
   }
 
   if (config.delayMinutes > 0) {
+    if (verifiedSignature) {
+      const scheduled = await enqueueAutoRelease({
+        escrowId,
+        orderId,
+        signedProof: {
+          proof: confirmation.deliveryProof,
+          signature: verifiedSignature,
+          confirmedBy,
+        },
+        graceExpiresAt: Date.now() + config.delayMinutes * 60_000,
+      });
+      return { escrowId, orderId, scheduled: true, ...scheduled };
+    }
     const job: ScheduledReleaseJob = {
       escrowId,
       orderId,

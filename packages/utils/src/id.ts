@@ -15,9 +15,10 @@ export type RequestHandler = (
   params: Record<string, string>
 ) => void | Promise<void>;
 
-/** Generate a UUID v4 identifier */
-export function generateId(): string {
-  return randomUUID();
+/** Generate a UUID v4 identifier with optional prefix */
+export function generateId(prefix = ""): string {
+  const id = randomUUID();
+  return prefix ? `${prefix}${id}` : id;
 }
 
 // Fix: trim the key before validation so that surrounding whitespace (common during copy-paste) does not cause a valid key to be rejected as invalid_strkey, and return the normalized (trimmed) key

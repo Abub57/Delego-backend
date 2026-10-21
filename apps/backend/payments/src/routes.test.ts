@@ -41,6 +41,29 @@ function findInitializeRoute(): Route {
   return route;
 }
 
+function findHealthRoute(): Route {
+  const route = registerRoutes().find(
+    (candidate) => candidate.method === "GET" && candidate.pattern.test("/health"),
+  );
+  if (!route) throw new Error("health route not registered");
+  return route;
+}
+
+describe("GET /health", () => {
+  it("returns the standard health status and an ISO timestamp", async () => {
+    const route = findHealthRoute();
+    const res = createMockRes();
+
+    await route.handler({} as IncomingMessage, res, {});
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe("ok");
+    expect(Number.isNaN(Date.parse(body.timestamp))).toBe(false);
+    expect(Object.keys(body).sort()).toEqual(["status", "timestamp"]);
+  });
+});
+
 describe("POST /escrow/initialize body size limit", () => {
   it("reads and parses a body under the 1MB limit (no 413)", async () => {
     const route = findInitializeRoute();

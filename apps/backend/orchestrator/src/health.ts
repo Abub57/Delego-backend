@@ -6,7 +6,7 @@
  *   redis    — critical when distributed locks are enabled (default); otherwise non-critical (pub/sub)
  */
 
-import { HealthRegistry, httpHealthCheck, type HealthCheckFn } from "@delegolabs/utils";
+import { createHealthRoutes, HealthRegistry, httpHealthCheck, type HealthCheckFn } from "@delegolabs/utils";
 import { Pool } from "pg";
 
 export interface OrchestratorHealthOptions {
@@ -61,4 +61,17 @@ export function createOrchestratorHealthRegistry(
   );
 
   return registry;
+}
+
+/** Standard health endpoints exposed by the orchestrator HTTP service. */
+export function createOrchestratorHealthRoutes(
+  registry: HealthRegistry = createOrchestratorHealthRegistry(),
+  extraMetrics?: () => string,
+) {
+  return createHealthRoutes({
+    registry,
+    serviceName: "orchestrator",
+    version: "0.0.1",
+    extraMetrics,
+  });
 }

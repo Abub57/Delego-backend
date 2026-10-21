@@ -1,10 +1,11 @@
 import { route, type Route } from "@delegolabs/utils";
-import { checkFraudHandler, listRulesHandler, createRuleHandler, getRuleHandler, updateRuleHandler, deleteRuleHandler, evaluateRulesHandler, getModelVersionHandler, retrainModelHandler, getModelPerformanceHandler, listCasesHandler, createCaseHandler, getCaseHandler, updateCaseHandler, addEvidenceHandler, getFraudRateHandler, getFraudTrendsHandler, getTopFraudRulesHandler } from "./fraudRoutes.js";
+import { checkFraudHandler, listRulesHandler, createRuleHandler, getRuleHandler, updateRuleHandler, deleteRuleHandler, evaluateRulesHandler, getModelVersionHandler, retrainModelHandler, getModelPerformanceHandler, listCasesHandler, createCaseHandler, getCaseHandler, updateCaseHandler, addEvidenceHandler, getFraudRateHandler, getFraudTrendsHandler, getTopFraudRulesHandler, recordEscrowVelocityHandler } from "./fraudRoutes.js";
 
 export function registerFraudRoutes(): Route[] {
   return [
     // Fraud check
     route("POST", "/api/v1/fraud/check", checkFraudHandler),
+    route("POST", "/api/v1/fraud/escrow-velocity", recordEscrowVelocityHandler),
 
     // Rules management
     route("GET", "/api/v1/rules", listRulesHandler),

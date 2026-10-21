@@ -10,9 +10,7 @@
 
 import { Redis } from "ioredis";
 import { createLogger, type Logger } from "@delegolabs/utils";
-import { Horizon, Keypair, TransactionBuilder, Networks } from "@stellar/stellar-sdk";
-
-const log = createLogger("wallet:txHealer", process.env.LOG_LEVEL ?? "info");
+import { Horizon, Networks } from "@stellar/stellar-sdk";
 
 // ---------------------------------------------------------------------------
 // Types (matching issue spec)

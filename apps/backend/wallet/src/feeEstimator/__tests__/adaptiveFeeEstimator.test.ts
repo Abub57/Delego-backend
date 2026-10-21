@@ -25,7 +25,7 @@ describe("AdaptiveFeeEstimator", () => {
 
   const calmEstimate = { recommendedFeeStroops: "100", p50: 100, p95: 120, p99: 150, source: "horizon" };
   const surgingEstimate = { recommendedFeeStroops: "600", p50: 200, p95: 600, p99: 1500, source: "horizon" };
-  const moderateEstimate = { recommendedFeeStroops: "200", p50: 100, p95: 180, p99: 350, source: "horizon" };
+  const moderateEstimate = { recommendedFeeStroops: "200", p50: 100, p95: 180, p99: 250, source: "horizon" };
 
   describe("assessCongestion", () => {
     it("should return calm when fees are low and stable", () => {

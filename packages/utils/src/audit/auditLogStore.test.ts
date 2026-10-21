@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { AuditLogError, recordAuditEntry, queryAuditLog, getChainSegment } from "./auditLogStore.js";
 import { verifyChain } from "./hashChain.js";
+import { verifyStoredChain, formatChainVerificationReport } from "./verifyStoredChain.js";
 import type { Queryable } from "./types.js";
 
 /**
@@ -378,5 +379,144 @@ describe("getChainSegment", () => {
     const segment = await getChainSegment(db);
     expect(segment[0].transactionId).toBe("tx-1");
     expect(segment[1].transactionId).toBe("tx-2");
+  });
+});
+
+describe("verifyStoredChain", () => {
+  async function seedChain(db: FakeAuditDb, count: number): Promise<void> {
+    for (let i = 1; i <= count; i++) {
+      await recordAuditEntry(db, {
+        tableName: "users",
+        recordId: `u${i}`,
+        operation: "INSERT",
+        transactionId: `tx-${i}`,
+        newValues: { name: `user-${i}` },
+      });
+    }
+  }
+
+  it("reports a valid chain for an untampered log", async () => {
+    const db = new FakeAuditDb();
+    await seedChain(db, 3);
+
+    const result = await verifyStoredChain(db);
+
+    expect(result.valid).toBe(true);
+    expect(result.entriesChecked).toBe(3);
+    expect(result.firstBrokenEntryId).toBeNull();
+    expect(result.pagesChecked).toBe(1);
+    expect(result.lastSequenceNum).toBe(3);
+  });
+
+  it("reports an empty log as valid without checking anything", async () => {
+    const db = new FakeAuditDb();
+
+    const result = await verifyStoredChain(db);
+
+    expect(result.valid).toBe(true);
+    expect(result.entriesChecked).toBe(0);
+    expect(result.lastSequenceNum).toBeNull();
+  });
+
+  it("detects a row whose payload was modified out-of-band", async () => {
+    const db = new FakeAuditDb();
+    await seedChain(db, 3);
+
+    // Simulate someone with direct DB access altering a historical row:
+    // the stored payload changes but its entry_hash stays as recorded.
+    db.rows[0].new_values = { name: "MALLORY" };
+
+    const result = await verifyStoredChain(db);
+
+    expect(result.valid).toBe(false);
+    expect(result.entriesChecked).toBe(0);
+    expect(result.firstBrokenEntryId).toBe("audit-1");
+    expect(result.reason).toMatch(/entryHash mismatch/);
+  });
+
+  it("detects a row whose stored entry_hash was modified out-of-band", async () => {
+    const db = new FakeAuditDb();
+    await seedChain(db, 3);
+
+    db.rows[1].entry_hash = "0".repeat(64);
+
+    const result = await verifyStoredChain(db);
+
+    expect(result.valid).toBe(false);
+    expect(result.entriesChecked).toBe(1);
+    expect(result.firstBrokenEntryId).toBe("audit-2");
+  });
+
+  it("detects a deleted row via a broken prevHash link", async () => {
+    const db = new FakeAuditDb();
+    await seedChain(db, 3);
+
+    db.rows.splice(1, 1); // remove audit-2
+
+    const result = await verifyStoredChain(db);
+
+    expect(result.valid).toBe(false);
+    expect(result.firstBrokenEntryId).toBe("audit-3");
+    expect(result.reason).toMatch(/prevHash mismatch/);
+  });
+
+  it("walks the whole chain across pages instead of stopping at the page size", async () => {
+    const db = new FakeAuditDb();
+    await seedChain(db, 5);
+
+    const result = await verifyStoredChain(db, { pageSize: 2 });
+
+    expect(result.valid).toBe(true);
+    expect(result.entriesChecked).toBe(5);
+    expect(result.pagesChecked).toBe(3);
+    expect(result.lastSequenceNum).toBe(5);
+  });
+
+  it("detects tampering that falls on a later page", async () => {
+    const db = new FakeAuditDb();
+    await seedChain(db, 5);
+
+    db.rows[3].new_values = { name: "MALLORY" }; // audit-4, on the second page
+
+    const result = await verifyStoredChain(db, { pageSize: 2 });
+
+    expect(result.valid).toBe(false);
+    expect(result.firstBrokenEntryId).toBe("audit-4");
+    expect(result.entriesChecked).toBe(3);
+    expect(result.lastSequenceNum).toBe(3);
+  });
+
+  it("rejects a non-positive pageSize", async () => {
+    const db = new FakeAuditDb();
+    await expect(verifyStoredChain(db, { pageSize: 0 })).rejects.toThrow(RangeError);
+  });
+});
+
+describe("formatChainVerificationReport", () => {
+  it("summarizes an intact chain", () => {
+    const report = formatChainVerificationReport({
+      valid: true,
+      entriesChecked: 3,
+      firstBrokenEntryId: null,
+      reason: null,
+      pagesChecked: 1,
+      lastSequenceNum: 3,
+    });
+    expect(report).toContain("OK");
+    expect(report).toContain("3 entries");
+  });
+
+  it("includes the first broken entry and reason for a broken chain", () => {
+    const report = formatChainVerificationReport({
+      valid: false,
+      entriesChecked: 2,
+      firstBrokenEntryId: "audit-3",
+      reason: "entryHash mismatch on entry audit-3",
+      pagesChecked: 1,
+      lastSequenceNum: 2,
+    });
+    expect(report).toContain("BROKEN");
+    expect(report).toContain("audit-3");
+    expect(report).toContain("entryHash mismatch");
   });
 });

@@ -2,6 +2,11 @@
  * Analytics API request/response schemas
  */
 
+// #392 — Merchant Reputation Weight Calculator types live in their own file
+// (schemas.merchant-quality.ts) since they have their own request/response
+// siblings unrelated to the notification-funnel schemas below.
+export * from "./schemas.merchant-quality.js";
+
 export interface FunnelMetricsQuery {
   templateId?: string;
   channel?: string;

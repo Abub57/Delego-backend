@@ -135,20 +135,76 @@ describe("validatePresignedUrlRequest", () => {
     expect(result.valid).toBe(true);
   });
 
-  it("accepts all allowed content types", () => {
-    const contentTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"] as const;
+  it("accepts all allowed content types with matching extensions", () => {
+    const cases = [
+      { filename: "photo.jpg", contentType: "image/jpeg" },
+      { filename: "photo.jpeg", contentType: "image/jpeg" },
+      { filename: "icon.png", contentType: "image/png" },
+      { filename: "document.pdf", contentType: "application/pdf" },
+      { filename: "banner.webp", contentType: "image/webp", purpose: "product_image" as const },
+    ];
 
-    for (const contentType of contentTypes) {
+    for (const item of cases) {
       const request = {
-        filename: `file.${contentType.split("/")[1]}`,
-        contentType,
+        filename: item.filename,
+        contentType: item.contentType as any,
         fileSizeBytes: 1024,
-        purpose: "product_image",
+        purpose: item.purpose || "dispute_evidence",
       };
 
       const result = validatePresignedUrlRequest(request);
       expect(result.valid).toBe(true);
     }
+  });
+
+  it("supports UploadPreSignRequest interface (fileName, expectedMimeType, contentLength)", () => {
+    const request = {
+      fileName: "dispute_proof.pdf",
+      expectedMimeType: "application/pdf" as const,
+      contentLength: 2048,
+    };
+
+    const result = validatePresignedUrlRequest(request);
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects file extension mismatching declared MIME type", () => {
+    const request = {
+      filename: "payload.exe",
+      contentType: "image/jpeg" as const,
+      fileSizeBytes: 1024,
+      purpose: "dispute_evidence" as const,
+    };
+
+    const result = validatePresignedUrlRequest(request);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('File extension ".exe" does not match allowed extensions');
+  });
+
+  it("rejects HTML/SVG file extensions disguised as evidence", () => {
+    const request = {
+      filename: "xss.html",
+      contentType: "image/png" as const,
+      fileSizeBytes: 1024,
+      purpose: "dispute_evidence" as const,
+    };
+
+    const result = validatePresignedUrlRequest(request);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('File extension ".html" does not match allowed extensions');
+  });
+
+  it("rejects webp for dispute evidence uploads (strict allowlist)", () => {
+    const request = {
+      filename: "photo.webp",
+      contentType: "image/webp" as const,
+      fileSizeBytes: 1024,
+      purpose: "dispute_evidence" as const,
+    };
+
+    const result = validatePresignedUrlRequest(request);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Invalid contentType for dispute evidence");
   });
 });
 

@@ -139,3 +139,12 @@ export const ESCROW_STATUS_META: Record<EscrowStatus, EscrowStatusMeta> = {
   },
 };
 
+export type SagaStep = "reserve_stock" | "submit_soroban_escrow" | "record_order_db" | "complete";
+
+export interface EscrowSagaContext {
+  sagaId: string;
+  orderId: string;
+  status: "executing" | "compensating" | "succeeded" | "failed";
+  step: SagaStep;
+  payload: Record<string, unknown>;
+}

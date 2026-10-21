@@ -64,7 +64,7 @@ export async function generateTokens(
 export function verifyToken(
   token: string,
   config: JwtValidationConfig = getJwtValidationConfig(),
-): { userId: string; email?: string; roles?: string[]; jti?: string } {
+): { userId: string; email?: string; roles?: string[]; jti?: string; permissions?: string[] } {
   const decoded = verifyWithStore(token, {
     clockTolerance: config.clockToleranceSeconds,
     issuer: config.issuer,
@@ -76,6 +76,7 @@ export function verifyToken(
       email: typeof decoded.email === "string" ? decoded.email : undefined,
       roles: Array.isArray(decoded.roles) ? (decoded.roles as string[]) : undefined,
       jti: typeof decoded.jti === "string" ? decoded.jti : undefined,
+      permissions: Array.isArray(decoded.permissions) ? (decoded.permissions as string[]) : undefined,
     };
   }
   throw new Error("Invalid token structure");

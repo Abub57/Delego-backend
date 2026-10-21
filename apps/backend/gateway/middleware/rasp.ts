@@ -1,3 +1,5 @@
+import { fetchWithCorrelation } from "./correlation.js";
+
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { json, createLogger } from "@delegolabs/utils";
@@ -126,7 +128,7 @@ function safeDecode(value: string): string {
 async function sendToSiem(event: RASPEvent, config: RASPConfig): Promise<void> {
   if (!config.siemWebhookUrl || typeof fetch !== "function") return;
   try {
-    const response = await fetch(config.siemWebhookUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "delego-gateway-rasp", event }) });
+    const response = await fetchWithCorrelation(config.siemWebhookUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "delego-gateway-rasp", event }) });
     if (!response.ok) throw new Error(`SIEM responded ${response.status}`);
   } catch (error) {
     metrics.siemDeliveryFailures += 1;

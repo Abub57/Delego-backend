@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ApiResponse, TransactionRequest, TransactionResult } from "@delegolabs/types";
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, SERVICE_AUTH_HEADER } from "@delegolabs/utils";
 import {
   Address,
   Horizon,
@@ -74,6 +74,11 @@ export function orderIdToContractBytes(orderId: string): Buffer {
 export async function submitContractInvocation(
   request: TransactionRequest
 ): Promise<TransactionResult> {
+  const serviceToken = process.env.PAYMENTS_WALLET_SERVICE_TOKEN;
+  if (!serviceToken?.trim()) {
+    throw new Error("PAYMENTS_WALLET_SERVICE_TOKEN is not configured");
+  }
+
   const walletUrl = getWalletUrl();
   const url = `${walletUrl}/transactions/submit`;
 
@@ -87,7 +92,10 @@ export async function submitContractInvocation(
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        [SERVICE_AUTH_HEADER]: serviceToken,
+      },
       body: JSON.stringify({
         sourceAddress: request.sourceAddress,
         contractId: request.contractId,

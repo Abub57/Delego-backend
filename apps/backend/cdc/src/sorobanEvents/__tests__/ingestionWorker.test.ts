@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { normalizeEvent, CursorStore, SorobanEventIngestionWorker, RawSorobanEvent } from "../ingestionWorker.js";
 
 vi.mock("@delegolabs/utils", () => ({
@@ -190,6 +190,7 @@ describe("SorobanEventIngestionWorker", () => {
     expect(count).toBe(1);
     expect(mockRedis.xadd).toHaveBeenCalledWith(
       "soroban:events", "*",
+      "eventId", "e1",
       "contractId", "CB1",
       "topic", "deposit",
       "data", expect.any(String),

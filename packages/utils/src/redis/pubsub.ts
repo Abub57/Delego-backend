@@ -14,6 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { createLogger } from "../logger.js";
+import { injectPubSubHeaders, withConsumerSpan } from "../telemetry/propagation.js";
 import type {
   DeadLetterMessage,
   MessageHandler,
@@ -192,6 +193,8 @@ export class RedisPubSubManager {
       headers: {
         "content-type": this.serializer.format,
         "publisher-id": this.publisherId,
+        // W3C traceparent of the active span, so consumers continue the trace.
+        ...injectPubSubHeaders(),
         ...options.headers,
       },
       timestamp: new Date().toISOString(),
@@ -322,7 +325,12 @@ export class RedisPubSubManager {
   ): Promise<void> {
     for (let attempt = 1; attempt <= subscription.maxRetries; attempt++) {
       try {
-        await subscription.callback(message);
+        await withConsumerSpan(
+          message.headers,
+          message.channel ?? subscription.channel,
+          { "messaging.destination": message.channel ?? subscription.channel, "messaging.message_type": message.type },
+          () => subscription.callback(message),
+        );
 
         if (subscription.ackRequired) {
           this.acknowledgeMessage(message.id);

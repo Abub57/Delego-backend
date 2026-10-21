@@ -1,468 +1,87 @@
-# Delego Architecture
+# Architecture
 
 ## Overview
 
-Delego implements a microservices architecture designed for AI-powered delegated commerce on the Stellar blockchain. The system enables users to delegate shopping and payment tasks to AI agents while maintaining approval and spending controls through Soroban smart contracts.
+This document describes the high-level architecture of the platform, including the
+services that make up the backend, how they communicate, and the cross-cutting
+concerns (observability, tracing, configuration) that apply to all of them.
 
-### Core Components
+## Backend Services
 
-- **Frontend**: Customer web application — see the [Delego](https://github.com/DelegoLabs/Delego) repository
-- **Backend Services**: Gateway, orchestrator, wallet, payments, notifications (under `apps/backend/`)
-- **Agents**: AI agent runtime (`agents/`)
-- **Smart Contracts**: Soroban escrow and permissions contracts — see the [Delego-contracts](https://github.com/DelegoLabs/Delego-contracts) repository
-- **Shared Libraries**: SDK, types, utilities (published from this repository)
+The backend is composed of several independently deployable applications that
+communicate over HTTP and Redis streams:
 
-### Design Principles
+- **API Gateway** — the public entry point. Terminates client requests and
+  forwards them to the orchestrator.
+- **Orchestrator** — coordinates workflows and fans out work to downstream
+  services.
+- **Payments** — handles payment processing and interacts with external
+  providers.
+- **Database** — persistent storage accessed by the services above.
 
-1. **Service Isolation**: Each service has a single responsibility and can be deployed independently
-2. **Blockchain Security**: Trust-critical operations (escrow, permissions) live on-chain
-3. **Off-Chain Efficiency**: Catalog data, search, and AI processing run off-chain
-4. **Event-Driven**: Services communicate via events for loose coupling
-5. **Audit Trail**: All actions are logged for transparency and debugging
+A single request typically spans the gateway, orchestrator, payments, and the
+database. Because these hops cross process and network boundaries, unified trace
+context is required to debug cross-service latency.
 
-## System Architecture
+## Distributed Tracing (OpenTelemetry)
 
-### High-Level Flow
+End-to-end distributed tracing is implemented with OpenTelemetry. Every backend
+application is instrumented so that a request can be followed from the API
+gateway all the way down to database queries.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         User Layer                              │
-│          Web App (Delego repo — apps/frontend)                  │
-│              React/Next.js + Stellar Wallet                     │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             v
-┌─────────────────────────────────────────────────────────────────┐
-│                      API Gateway Layer                          │
-│             (apps/backend/gateway - Port 3000)                  │
-│  • Authentication (JWT)                                         │
-│  • Authorization (RBAC + Wallet-based)                          │
-│  • Rate Limiting (Redis)                                        │
-│  • Request Routing                                              │
-│  • API Versioning                                               │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        │                    │                    │
-        v                    v                    v
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│  Orchestrator   │  │     Wallet      │  │    Payments     │
-│   Service       │  │    Service      │  │    Service      │
-│   (Port 3010)   │  │   (Port 3012)   │  │   (Port 3014)   │
-│                 │  │                 │  │                 │
-│ • Workflow      │  │ • Stellar      │  │ • Escrow        │
-│   Coordination  │  │   Account Mgmt  │  │   Coordination  │
-│ • State Machine │  │ • Soroban      │  │ • Settlement    │
-│ • Event Pub/Sub │  │   Permissions  │  │ • Payment Events│
-└────────┬────────┘  └────────┬────────┘  └────────┬────────┘
-         │                    │                    │
-         v                    v                    v
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│     Agents      │  │   Stellar       │  │    Soroban      │
-│    Service      │  │   Network       │  │    Contracts    │
-│   (Port 3011)   │  │                 │  │                 │
-│                 │  │ • Horizon API   │  │ • Escrow        │
-│ • Buyer Agent   │  │ • Transaction   │  │   Contract      │
-│ • Payment Agent │  │   Submission    │  │ • Permissions   │
-│ • Runtime       │  │ • Account       │  │   Contract      │
-│   Abstraction   │  │   Management    │  │ • Reputation    │
-└─────────────────┘  └─────────────────┘  └────────┬────────┘
-                                                   │
-                            ┌──────────────────────┼──────────────────────┐
-                            │                      │                      │
-                            v                      v                      v
-                     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-                     │   Escrow     │     │ Permissions  │     │  Reputation  │
-                     │   Contract   │     │   Contract   │     │   Contract   │
-                     │              │     │              │     │              │
-                     │ • Fund Lock  │     │ • Spending   │     │ • Scores     │
-                     │ • Release    │     │   Limits     │     │ • History    │
-                     │ • Refund     │     │ • Approvals  │     │ • Disputes   │
-                     └──────────────┘     └──────────────┘     └──────────────┘
+### SDK Configuration
+
+Each backend app is configured with `@opentelemetry/sdk-node`. The SDK is
+initialized at process startup, before any other application code, so that
+auto-instrumentation can patch the relevant libraries. Configuration is driven
+by a shared `TracedServiceConfig`:
+
+```typescript
+import { trace, context, SpanStatusCode } from "@opentelemetry/api";
+
+export interface TracedServiceConfig {
+  serviceName: string;
+  collectorUrl: string;
+  sampleRate: number;
+}
 ```
 
-### Supporting Services
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   Notifications Service                          │
-│                    (Port 3015)                                  │
-│  • Email Notifications (SendGrid)                               │
-│  • Push Notifications (Web Push)                                 │
-│  • SMS Notifications (Twilio) - Planned                           │
-│  • Notification Templates                                        │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                      Data Layer                                  │
-│                                                                  │
-│  PostgreSQL (Port 5432)          Redis (Port 6379)               │
-│  • Users                         • Sessions                      │
-│  • Delegations                   • Rate Limits                   │
-│  • Orders                        • Workflow State Cache         │
-│  • Audit Logs                    • Pub/Sub Channels              │
-│  • Transactions                  • Temporary Data                │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Service Boundaries
-
-### Gateway Service (`apps/backend/gateway`)
-
-**Responsibilities:**
-- HTTP API endpoint management
-- JWT authentication and validation
-- Role-based access control (RBAC)
-- Wallet-based authorization
-- Rate limiting and throttling
-- Request routing to backend services
-- API versioning
-- Request/response logging
-- CORS handling
-
-**Tech Stack:**
-- Node.js with TypeScript (`@delegolabs/utils` HTTP server)
-- JWT for authentication
-- Redis for rate limiting
-- PostgreSQL for user data
-
-**API Endpoints:**
-- `POST /api/v1/auth/register` - User registration
-- `POST /api/v1/auth/login` - User authentication
-- `POST /api/v1/auth/refresh` - Token refresh
-- `POST /api/v1/auth/logout` - User logout
-- `GET/POST /api/v1/delegations` - List / create delegations
-- `GET/PATCH/DELETE /api/v1/delegations/:id` - Delegation detail / update / revoke
-- `GET /api/v1/wallets/:walletId` - Wallet lookup
-- `GET /api/v1/admin/rate-limit/metrics` - Rate-limit metrics
-- `GET /api/v1/admin/circuit-breakers` - Circuit breaker status
-- `GET /api/docs` - Swagger UI
-
-### Orchestrator Service (`apps/backend/orchestrator`)
-
-**Responsibilities:**
-- Purchase workflow coordination
-- State machine management
-- Event publishing/subscribing
-- Service orchestration
-- Workflow persistence
-- Error handling and retries
-- Timeout management
-
-**Workflow States:**
-1. `INITIATED` - Order created by user
-2. `SEARCHING` - Agent searching for products
-3. `FOUND` - Products found, awaiting approval
-4. `APPROVED` - User approved purchase
-5. `ESCROW_FUNDED` - Funds locked in escrow
-6. `PURCHASED` - Purchase completed
-7. `DELIVERING` - Delivery in progress
-8. `DELIVERED` - Delivery confirmed
-9. `COMPLETED` - Order completed
-10. `CANCELLED` - Order cancelled
-11. `FAILED` - Order failed
-
-**Tech Stack:**
-- Node.js with TypeScript
-- Custom XState-style state machine (no external dependency)
-- Event bus (Redis Pub/Sub)
-- PostgreSQL for workflow persistence
-
-### Agents Service (`agents`)
-
-**Responsibilities:**
-- AI agent runtime execution
-- LLM provider abstraction
-- Tool registry and execution
-- Memory management
-- Agent context management
-- Prompt engineering
-- Response parsing and validation
-
-**Agent Types:**
-- **Buyer Agent**: Product search, comparison, recommendation
-- **Payment Agent**: Spending policy enforcement, payment execution
-- **Merchant Agent** (Planned): Fulfillment assistance
-- **Delivery Agent** (Planned): Tracking and confirmation
-
-**Tech Stack:**
-- Node.js with TypeScript
-- LLM APIs (OpenAI, Anthropic, etc.)
-- Vector database for memory (Planned)
-- Tool execution framework
-
-### Wallet Service (`apps/backend/wallet`)
-
-**Responsibilities:**
-- Stellar account management
-- Soroban permission grants
-- Transaction signing
-- Transaction submission
-- Balance tracking
-- Key management
-- Soroban contract simulation
-
-**Security Features:**
-- Encrypted key storage
-- Hardware Security Module (HSM) integration (Planned)
-- Multi-signature support (Planned)
-- Session keys for delegated operations
-
-**Tech Stack:**
-- Node.js with TypeScript
-- Stellar SDK for JavaScript
-- Soroban RPC client
-- PostgreSQL for wallet data
-
-### Payments Service (`apps/backend/payments`)
-
-**Responsibilities:**
-- Escrow contract coordination
-- Payment event processing
-- Settlement execution
-- Refund processing
-- Payment status tracking
-- Transaction monitoring
-
-**Payment Flow:**
-1. User approves purchase
-2. Wallet service signs transaction
-3. Payments service funds escrow
-4. Escrow contract locks funds
-5. Delivery confirmed
-6. Escrow releases funds to merchant
-7. Settlement recorded
-
-**Tech Stack:**
-- Node.js with TypeScript
-- Soroban SDK
-- Stellar SDK
-- PostgreSQL for payment records
-
-### Notifications Service (`apps/backend/notifications`)
-
-**Responsibilities:**
-- Email notifications
-- Push notifications
-- SMS notifications (Planned)
-- Notification templates
-- User preferences
-- Delivery tracking
-- Retry logic
-
-**Notification Types:**
-- Order status updates
-- Payment confirmations
-- Approval requests
-- Delivery notifications
-- Security alerts
-
-**Tech Stack:**
-- Node.js with TypeScript
-- SendGrid for email
-- Web Push API for push notifications
-- Twilio for SMS (Planned)
-
-## Data Stores
-
-### PostgreSQL
-
-**Schema:**
-- `users` - User accounts and profiles
-- `wallets` - Stellar wallet addresses and metadata
-- `delegations` - Agent delegation configurations
-- `orders` - Purchase orders and status
-- `transactions` - On-chain transaction records
-- `audit_logs` - System audit trail
-- `notifications` - Notification history
-- `sessions` - User sessions
-
-**Connection:**
-- Port: 5432
-- Database: `delego`
-- Migrations managed via `database/migrations`
-
-### Redis
-
-**Use Cases:**
-- Session storage (JWT tokens)
-- Rate limiting (sliding window)
-- Workflow state cache
-- Pub/Sub for service communication
-- Temporary data storage
-- Caching frequently accessed data
-
-**Connection:**
-- Port: 6379
-- Database: 0 (default)
-
-### Soroban Smart Contracts
-
-**Contract Storage:**
-- Escrow contract - Locked funds per order
-- Permissions contract - Delegated spending limits
-- Reputation contract - Cumulative scores (Planned)
-
-**Network:**
-- Testnet for development
-- Mainnet for production
-
-## Cross-Cutting Concerns
-
-### Authentication
-
-- **JWT Tokens**: Issued by gateway after login
-- **Wallet Addresses**: Used as primary identity
-- **Session Management**: Redis-based session storage
-- **Token Refresh**: Automatic token refresh mechanism
-
-### Authorization
-
-- **Role-Based Access Control (RBAC)**: User roles and permissions
-- **Wallet-Based Permissions**: Soroban contract permissions
-- **Spending Limits**: Enforced by permissions contract
-- **Approval Thresholds**: Configurable approval amounts
-
-### Spending Controls
-
-- **Permissions Contract**: On-chain spending limits
-- **Wallet Service Policy**: Off-chain policy checks
-- **Approval Workflows**: User approval for high-value transactions
-- **Real-time Monitoring**: Continuous spending tracking
-
-### Observability
-
-- **Structured Logging**: JSON-formatted logs with correlation IDs
-- **Distributed Tracing**: Request tracing across services (Planned)
-- **Metrics**: Prometheus metrics collection (Planned)
-- **Alerting**: Alerting on critical failures (Planned)
-
-### Security
-
-- **Encryption**: End-to-end encryption for sensitive data
-- **Key Management**: Secure key storage and rotation
-- **Audit Logging**: Complete audit trail of all actions
-- **Input Validation**: Strict input validation and sanitization
-- **SQL Injection Prevention**: Parameterized queries
-- **XSS Prevention**: Content Security Policy (CSP)
-
-## Communication Patterns
-
-### Service-to-Service Communication
-
-- **HTTP/REST**: Synchronous communication between services
-- **gRPC** (Planned): High-performance RPC for internal communication
-- **Message Queue** (Planned): Asynchronous event processing
-
-### Event-Driven Architecture
-
-- **Redis Pub/Sub**: Real-time event publishing
-- **Event Types**: Order events, payment events, notification events
-- **Event Sourcing** (Planned): Event log for state reconstruction
-
-### External Integrations
-
-- **Stellar Horizon API**: Blockchain interaction
-- **Soroban RPC**: Smart contract interaction
-- **LLM APIs**: AI agent execution
-- **Email Service**: SendGrid integration
-- **Push Service**: Web Push API
-
-## Deployment Architecture
-
-### Development Environment
-
-- **Docker Compose**: Local development infrastructure (PostgreSQL and Redis)
-- **Hot Reload**: Development mode with auto-reload
-- **Shared Database**: Single PostgreSQL instance
-- **Shared Redis**: Single Redis instance
-
-### Production Environment (Planned)
-
-- **Kubernetes**: Container orchestration
-- **Service Mesh**: Istio for service communication
-- **Database Clustering**: PostgreSQL with replication
-- **Redis Cluster**: Redis with clustering
-- **Load Balancing**: Multiple instances per service
-- **Auto-scaling**: Horizontal pod autoscaling
-
-## Monitoring and Observability (Planned)
-
-- **Metrics**: Prometheus for metrics collection
-- **Logging**: ELK stack for log aggregation
-- **Tracing**: Jaeger for distributed tracing
-- **Alerting**: AlertManager for alert management
-- **Dashboards**: Grafana for visualization
-
-## Security Architecture
-
-### Network Security
-
-- **TLS/SSL**: All communication encrypted
-- **Service Mesh**: mTLS for service-to-service communication
-- **Network Policies**: Kubernetes network policies
-- **DDoS Protection**: Cloudflare or similar
-
-### Application Security
-
-- **Authentication**: JWT with short-lived tokens
-- **Authorization**: RBAC with wallet-based permissions
-- **Input Validation**: Strict validation on all inputs
-- **Output Encoding**: Prevent XSS attacks
-- **CSRF Protection**: CSRF tokens for state-changing operations
-
-### Blockchain Security
-
-- **Smart Contract Audits**: Professional security audits
-- **Multi-signature**: Multi-sig for critical operations
-- **Time-locks**: Time-locked transactions
-- **Emergency Controls**: Emergency pause mechanisms
-
-## Scalability Considerations
-
-### Horizontal Scaling
-
-- **Stateless Services**: Gateway, orchestrator, agents
-- **Stateful Services**: Wallet, payments (with shared state)
-- **Database Sharding**: Horizontal database scaling
-- **Cache Layer**: Redis for caching
-
-### Performance Optimization
-
-- **Connection Pooling**: Database connection pooling
-- **Caching Strategy**: Multi-level caching
-- **Lazy Loading**: On-demand data loading
-- **Batch Processing**: Batch operations for efficiency
-
-### Disaster Recovery
-
-- **Database Backups**: Regular automated backups
-- **Multi-Region Deployment**: Geographic distribution
-- **Failover Mechanisms**: Automatic failover
-- **Data Replication**: Real-time data replication
-
-## Future Expansions
-
-### Planned Services
-
-- **Merchant App**: Seller-facing application
-- **Mobile Apps**: iOS and Android applications
-- **Delivery Agent**: Delivery tracking and coordination
-- **Catalog Service**: Product catalog management
-- **Analytics Service**: Business intelligence and analytics
-
-### Planned Features
-
-- **Multi-Chain Support**: Support for other blockchains
-- **Advanced AI**: More sophisticated AI agents
-- **Social Features**: Social commerce capabilities
-- **Marketplace**: Open marketplace for merchants
-
-## Further Reading
-
-- [System Design](./docs/architecture/system-design.md)
-- [Agent Architecture](./docs/architecture/agents.md)
-- [Wallet Architecture](./docs/architecture/wallet.md)
-- [Smart Contract Architecture](./docs/architecture/contracts.md)
-- [API Reference](./docs/api-reference.md)
-- [Contributing Guide](./docs/contributor-guide.md)
+- `serviceName` — the logical name of the service, attached to every span as the
+  `service.name` resource attribute.
+- `collectorUrl` — the OTLP endpoint of the OpenTelemetry collector (or Jaeger)
+  that spans are exported to.
+- `sampleRate` — the head sampling ratio applied to new traces.
+
+### Context Propagation
+
+Trace context is propagated across every hop so that spans from different
+services are stitched into a single trace:
+
+- **HTTP requests** — the W3C `traceparent` header is injected on outgoing
+  requests and extracted on incoming requests. This covers gateway → orchestrator
+  and orchestrator → payments calls.
+- **Redis stream envelopes** — trace context is carried in the message envelope
+  alongside the payload. Producers inject the current context when publishing;
+  consumers extract it and start child spans, so asynchronous work remains part
+  of the originating trace.
+
+### Error Recording
+
+Failed operations record their outcome on the span. When an operation fails, the
+span status is set to `SpanStatusCode.ERROR` and the error is recorded on the
+span (message and stack), ensuring failures are visible in the trace alongside
+the latency data.
+
+### Export
+
+Spans are exported via OTLP to an OpenTelemetry collector. The collector can
+forward traces to Jaeger or any other compatible backend, providing end-to-end
+visibility from the API gateway to database queries.
+
+## Observability Goals
+
+- A single trace covers the full request path: gateway → orchestrator →
+  payments → database.
+- Cross-service latency can be attributed to a specific hop or query.
+- Errors are captured with status codes and recorded on the relevant span.
+- Traces are exportable to Jaeger / OpenTelemetry collectors.

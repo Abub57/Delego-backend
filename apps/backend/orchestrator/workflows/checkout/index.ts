@@ -2,7 +2,7 @@
  * #55 Checkout Cancellation Grace Period Timers
  * Uses BullMQ to schedule 30-minute checkout expiry and cancel incomplete orders.
  */
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, tracedFetch } from "@delegolabs/utils";
 import { Queue, Worker, type Job } from "bullmq";
 import { transitionWorkflow } from "../purchase/index.js";
 
@@ -111,9 +111,14 @@ export async function cancelTimeout(orderId: string): Promise<void> {
 
 /** Checkout workflow — payment confirmation via the saga coordinator */
 import type { ApiResponse } from "@delegolabs/types";
+import { SERVICE_AUTH_HEADER } from "@delegolabs/utils";
 import { SagaCoordinator, type SagaStep } from "../../src/saga/index.js";
 import type { SagaRecord, SagaStore } from "../../src/saga/index.js";
 import type { DistributedLockManager } from "../../src/locks/manager.js";
+import {
+  getInventoryReservationService,
+  type InventoryReservationItem,
+} from "../../src/inventory/reservation.js";
 import {
   createWorkflowCorrelationId,
   createWorkflowEventEnvelope,
@@ -238,6 +243,8 @@ export interface CheckoutWorkflowInput {
   sourceAddress: string;
   buyerAddress: string;
   sellerAddress: string;
+  userId?: string;
+  inventoryItems?: InventoryReservationItem[];
 }
 
 export interface CheckoutContext extends Record<string, unknown> {
@@ -245,8 +252,23 @@ export interface CheckoutContext extends Record<string, unknown> {
   sourceAddress: string;
   buyerAddress: string;
   sellerAddress: string;
+  userId: string;
   escrowId: string | null;
   confirmed: boolean;
+}
+
+/** Adds only the authenticated server-side user identity to validated checkout fields. */
+export function createCheckoutWorkflowInput(
+  input: Pick<CheckoutWorkflowInput, "orderId" | "sourceAddress" | "buyerAddress" | "sellerAddress">,
+  authenticatedUserId: string,
+): CheckoutWorkflowInput {
+  return {
+    orderId: input.orderId,
+    sourceAddress: input.sourceAddress,
+    buyerAddress: input.buyerAddress,
+    sellerAddress: input.sellerAddress,
+    userId: authenticatedUserId,
+  };
 }
 
 function getPaymentsUrl(): string {
@@ -262,13 +284,27 @@ interface EscrowOperationResult {
 
 const PAYMENTS_REQUEST_TIMEOUT_MS = Number(process.env.PAYMENTS_REQUEST_TIMEOUT_MS ?? 10_000);
 
-async function callPaymentsService<T>(path: string, body: Record<string, unknown>): Promise<T> {
+async function callPaymentsService<T>(
+  path: string,
+  body: Record<string, unknown>,
+  serviceAuth?: { userId: string },
+): Promise<T> {
   const url = `${getPaymentsUrl()}${path}`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (serviceAuth) {
+    const serviceToken = process.env.ORCHESTRATOR_PAYMENTS_SERVICE_TOKEN;
+    if (!serviceToken?.trim()) {
+      throw new Error("ORCHESTRATOR_PAYMENTS_SERVICE_TOKEN is not configured");
+    }
+    headers[SERVICE_AUTH_HEADER] = serviceToken;
+    headers["x-delego-user-id"] = serviceAuth.userId;
+  }
+
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await tracedFetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(PAYMENTS_REQUEST_TIMEOUT_MS),
     });
@@ -300,7 +336,7 @@ const depositEscrowStep: SagaStep<CheckoutContext> = {
       buyerAddress: context.buyerAddress,
       sellerAddress: context.sellerAddress,
       orderId: context.orderId,
-    });
+    }, { userId: context.userId });
     log.info("Escrow deposit confirmed", { orderId: context.orderId, txHash: result.txHash });
     if (!result.escrowId) {
       // Compensation refunds /escrow/${context.escrowId}/refund — falling back to orderId here
@@ -409,18 +445,40 @@ export async function checkoutWorkflow(
   coordinator: SagaCoordinator<CheckoutContext>,
   sagaId: string
 ): Promise<SagaRecord<CheckoutContext>> {
-  return coordinator.run(
-    sagaId,
-    input.orderId,
-    {
-      orderId: input.orderId,
-      sourceAddress: input.sourceAddress,
-      buyerAddress: input.buyerAddress,
-      sellerAddress: input.sellerAddress,
-      escrowId: null,
-      confirmed: false,
-    },
-    { workflowType: "checkout", correlationId: createWorkflowCorrelationId() }
-  );
+  // Issue #342: stamp each reservation with the order id (defaulting to this
+  // workflow's orderId when the caller didn't set one) so the unique
+  // (merchant_id, order_id, product_id) constraint catches duplicate
+  // checkout retries for the same order.
+  const inventoryItems = (input.inventoryItems ?? []).map((item) => ({
+    ...item,
+    orderId: item.orderId ?? input.orderId,
+  }));
+  const inventory = getInventoryReservationService();
+  if (inventoryItems.length > 0) await inventory.reserve(inventoryItems);
+
+  let result: SagaRecord<CheckoutContext>;
+  try {
+    result = await coordinator.run(
+      sagaId,
+      input.orderId,
+      {
+        orderId: input.orderId,
+        sourceAddress: input.sourceAddress,
+        buyerAddress: input.buyerAddress,
+        sellerAddress: input.sellerAddress,
+        userId: input.userId ?? "",
+        escrowId: null,
+        confirmed: false,
+      },
+      { workflowType: "checkout", correlationId: createWorkflowCorrelationId() }
+    );
+  } catch (error) {
+    if (inventoryItems.length > 0) await inventory.release(inventoryItems);
+    throw error;
+  }
+  if (result.status !== "completed" && inventoryItems.length > 0) {
+    await inventory.release(inventoryItems);
+  }
+  return result;
 }
 

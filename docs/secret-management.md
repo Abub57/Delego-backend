@@ -33,6 +33,7 @@ Any push/PR containing a real finding fails the `Secret Scan` check and blocks m
 | `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_SECRET` | Google Cloud Console / GitHub OAuth App settings respectively | Rotating invalidates any in-flight OAuth authorization code exchanges — low blast radius, but coordinate if traffic is live |
 | `ESCROW_WEBHOOK_SECRET` | Regenerate and update both this service's env and whatever sends the webhook | Both sides must be updated together — an old value on one side and new on the other fails signature verification |
 | `PUSH_PROVIDER_KEY` | Push provider's dashboard (VAPID keys — see `apps/backend/notifications/push/`) | Rotating VAPID keys invalidates existing push subscriptions; clients must re-subscribe |
+| `STORAGE_PRIMARY_KEY_ID` / `STORAGE_PRIMARY_SECRET` (Cloudflare R2 / AWS S3) | Automated — certmanager storage key rotation (#400): `POST /api/v1/storage/rotation`, or the hourly scheduler | Rotates every 90 days with zero downtime via dual-credential fallback (new key verified and promoted before the old one is revoked after a 24h grace period). See `apps/backend/certmanager/README.md` |
 
 ## What's not yet implemented
 

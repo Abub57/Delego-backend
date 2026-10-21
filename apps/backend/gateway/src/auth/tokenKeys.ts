@@ -18,8 +18,11 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, KeyObject } from "node:crypto";
 import jwt, { type Secret, type SignOptions, type VerifyOptions } from "jsonwebtoken";
 import type { JWKSKey, SigningAlgorithm } from "./tokenTypes.js";
+import { createChildLogger } from "../logger.js";
 
 const DEFAULT_ROTATION_DAYS = 2;
+
+const log = createChildLogger({ module: "token-keys" });
 
 /**
  * #32 — HS256 tokens fall back to this well-known secret. If JWT_SECRET is left unset
@@ -56,8 +59,7 @@ export function resolveJwtSecret(
       );
     }
     if (cachedJwtSecret === null) {
-      // eslint-disable-next-line no-console
-      console.warn("WARNING: Using default JWT_SECRET — set JWT_SECRET before deploying to production");
+      log.warn("Using default JWT_SECRET - set JWT_SECRET before deploying to production");
     }
     cachedJwtSecret = DEFAULT_JWT_SECRET;
     return DEFAULT_JWT_SECRET;

@@ -1,5 +1,5 @@
 /**
- * Outbound webhook management types (Issue #102).
+ * Outbound webhook management types (Issue #102, #381).
  */
 
 export type WebhookStatus = "active" | "paused" | "disabled";
@@ -67,3 +67,16 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   maxDelayMs: 60_000,
   backoffMultiplier: 2,
 };
+
+/** 48-hour grace period during which both the old and new secrets are valid (Issue #381). */
+export const ROTATION_GRACE_PERIOD_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * Tracks the current and (during rotation) previous webhook secret together
+ * with the deadline after which the previous secret is discarded (Issue #381).
+ */
+export interface SecretRotationState {
+  currentSecret: string;
+  previousSecret?: string;
+  rotationDeadline?: Date;
+}

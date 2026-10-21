@@ -88,6 +88,7 @@ export const escrowService: EscrowService = {
             memo: params.orderId
               ? `Deposit escrow for order ${params.orderId}`
               : "Deposit escrow funds",
+            userId: params.userId,
           })
         );
       } catch (err) {

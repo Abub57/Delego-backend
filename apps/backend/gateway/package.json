@@ -6,7 +6,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
-    "build": "tsc && node -e 'const fs=require(\"fs\");const p=require(\"path\");[\"routes\",\"src\",\"middleware\"].forEach(d=>{const s=p.join(\"dist/gateway\",d),t=p.join(\"dist\",d);if(fs.existsSync(s)&&!fs.existsSync(t))try{fs.symlinkSync(p.join(\"gateway\",d),t,\"dir\")}catch{fs.cpSync(s,t,{recursive:true})}})'",
+    "build": "tsc && node postbuild.js",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
@@ -14,10 +14,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@delegolabs/types": "workspace:*",
     "@delegolabs/utils": "workspace:*",
     "@aws-sdk/client-s3": "^3.758.0",
     "@aws-sdk/s3-request-presigner": "^3.758.0",
+    "@delegolabs/payments": "workspace:*",
+    "@delegolabs/types": "workspace:*",
+    "@delegolabs/utils": "workspace:*",
+    "@sentry/node": "^11.1.0",
+    "@simplewebauthn/server": "^13.1.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "bcryptjs": "^3.0.3",
@@ -25,9 +29,11 @@
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.21.0",
     "pg-hstore": "^2.3.4",
+    "redis": "^4.7.1",
     "sequelize": "^6.37.8"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.758.0",
     "@types/bcryptjs": "^3.0.0",
     "@types/express": "^5.0.6",
     "@types/ioredis-mock": "^8.2.7",
@@ -35,8 +41,8 @@
     "@types/node": "^22.0.0",
     "@types/pg": "^8.20.0",
     "@types/validator": "^13.15.10",
-    "@aws-sdk/client-s3": "^3.758.0",
     "ioredis-mock": "^8.13.1",
+    "pino-pretty": "^13.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.9"

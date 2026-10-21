@@ -302,4 +302,50 @@ suite("database migration runner", () => {
       ["schema/001_baseline.sql", "migration/002_alpha.sql", "migration/010_zeta.sql"],
     );
   });
+
+  it("times out blocked migrations after five seconds and rolls back", async (t) => {
+    const databaseUrl = await createDisposableDatabase(t);
+    await queryDatabase(databaseUrl, "CREATE TABLE lock_timeout_probe (id INTEGER)");
+
+    const fixture = makeFixtureDir();
+    fs.writeFileSync(path.join(fixture.schemaDir, "001_baseline.sql"), "SELECT 1;\n");
+    fs.writeFileSync(
+      path.join(fixture.migrationsDir, "002_lock_timeout_probe.sql"),
+      "ALTER TABLE lock_timeout_probe ADD COLUMN blocked_column INTEGER;\n",
+    );
+
+    const lockClient = new pg.Client({ connectionString: databaseUrl });
+    await lockClient.connect();
+    try {
+      await lockClient.query("BEGIN");
+      await lockClient.query("LOCK TABLE lock_timeout_probe IN ACCESS EXCLUSIVE MODE");
+
+      const startedAt = Date.now();
+      const result = runRunner(databaseUrl, {
+        schemaDir: fixture.schemaDir,
+        migrationsDir: fixture.migrationsDir,
+      });
+      const elapsedMs = Date.now() - startedAt;
+
+      assert.notEqual(result.status, 0, "the blocked migration must fail");
+      assert.match(`${result.stdout}\n${result.stderr}`, /lock timeout/i);
+      assert.ok(elapsedMs >= 4500, `expected the timeout near five seconds, got ${elapsedMs}ms`);
+      assert.ok(elapsedMs < 10000, `expected the runner to stop promptly, got ${elapsedMs}ms`);
+    } finally {
+      await lockClient.query("ROLLBACK");
+      await lockClient.end();
+    }
+
+    const columns = await queryDatabase(
+      databaseUrl,
+      "SELECT column_name FROM information_schema.columns WHERE table_name = 'lock_timeout_probe'",
+    );
+    assert.deepEqual(columns.rows.map((row) => row.column_name), ["id"]);
+
+    const appliedRows = await queryDatabase(
+      databaseUrl,
+      "SELECT filename FROM schema_migrations WHERE filename = 'migration/002_lock_timeout_probe.sql'",
+    );
+    assert.equal(appliedRows.rows.length, 0, "a failed migration must not be tracked");
+  });
 });

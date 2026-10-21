@@ -15,6 +15,8 @@ export interface HttpCheckOptions {
   timeoutMs?: number;
   expectedStatus?: number;
   headers?: Record<string, string>;
+  /** Optional request body (e.g. a JSON-RPC payload for POST probes). */
+  body?: string;
   /** Extracts the dependency status from a 2xx JSON body. */
   bodyStatus?: (body: unknown) => CheckResult["status"];
   /** Injectable fetch implementation (used in tests). */
@@ -32,6 +34,7 @@ export function httpHealthCheck(options: HttpCheckOptions): HealthCheckFn {
     timeoutMs = 2000,
     expectedStatus,
     headers,
+    body: requestBody,
     bodyStatus,
     fetchImpl = fetch,
   } = options;
@@ -44,6 +47,7 @@ export function httpHealthCheck(options: HttpCheckOptions): HealthCheckFn {
       response = await fetchImpl(url, {
         method,
         headers: { Accept: "application/json", ...headers },
+        body: requestBody,
         signal: controller.signal,
       });
     } catch (err) {
@@ -67,13 +71,13 @@ export function httpHealthCheck(options: HttpCheckOptions): HealthCheckFn {
     }
 
     if (bodyStatus) {
-      let body: unknown;
+      let payload: unknown;
       try {
-        body = await response.json();
+        payload = await response.json();
       } catch {
-        body = undefined;
+        payload = undefined;
       }
-      const status = bodyStatus(body);
+      const status = bodyStatus(payload);
       if (status) {
         return { status, details: { url, httpStatus: response.status } };
       }

@@ -11,7 +11,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Pool, type QueryResultRow } from "pg";
 import { createLogger } from "@delegolabs/utils";
-import type { Dispute, DisputeEvidenceEntry, DisputeResolution, DisputeStatus } from "./types.js";
+import type { Dispute, DisputeEvidenceEntry, DisputeResolution, DisputeStatus, DisputeTier } from "./types.js";
 
 const log = createLogger("payments:disputes:store", process.env.LOG_LEVEL ?? "info");
 
@@ -29,6 +29,8 @@ export interface DisputeUpdate {
   resolution?: DisputeResolution;
   resolutionError?: string | null;
   escalatedAt?: string;
+  escalationTier?: DisputeTier;
+  escalationEscalatedAt?: string;
 }
 
 export interface DisputeStore {
@@ -39,6 +41,8 @@ export interface DisputeStore {
   addEvidence(disputeId: string, entry: DisputeEvidenceEntry): Promise<Dispute>;
   /** Open/in-progress disputes whose SLA deadline has passed and haven't been escalated yet. */
   findBreached(now: Date): Promise<Dispute[]>;
+  /** Active disputes open for longer than `stalledHours` that aren't yet at the `senior` tier. */
+  findStalled(now: Date, stalledHours: number): Promise<Dispute[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +90,9 @@ export class InMemoryDisputeStore implements DisputeStore {
       status: update.status ?? existing.status,
       mediator: update.mediator ?? existing.mediator,
       resolution: update.resolution ?? existing.resolution,
+      escalationTier: update.escalationTier ?? existing.escalationTier,
+      escalationEscalatedAt:
+        update.escalationEscalatedAt ?? existing.escalationEscalatedAt,
       updatedAt: new Date().toISOString(),
     };
     this.disputes.set(id, updated);
@@ -119,6 +126,19 @@ export class InMemoryDisputeStore implements DisputeStore {
       )
       .map((d) => ({ ...d, evidence: [...d.evidence] }));
   }
+
+  async findStalled(now: Date, stalledHours: number): Promise<Dispute[]> {
+    const cutoff = now.getTime() - stalledHours * 60 * 60 * 1000;
+    return Array.from(this.disputes.values())
+      .filter(
+        (d) =>
+          d.status !== "decided" &&
+          d.status !== "resolved" &&
+          new Date(d.createdAt).getTime() <= cutoff &&
+          (d.escalationTier === undefined || d.escalationTier === "tier1")
+      )
+      .map((d) => ({ ...d, evidence: [...d.evidence] }));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +154,8 @@ interface DisputeRow extends QueryResultRow {
   status: DisputeStatus;
   sla_deadline: Date;
   escalated_at: Date | null;
+  escalation_tier: DisputeTier | null;
+  escalation_escalated_at: Date | null;
   resolution_type: DisputeResolution["type"] | null;
   resolution_buyer_amount: string | null;
   resolution_seller_amount: string | null;
@@ -193,6 +215,8 @@ async function mapDisputeRow(row: DisputeRow, client: Pool): Promise<Dispute> {
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     slaDeadline: row.sla_deadline.toISOString(),
+    escalationTier: row.escalation_tier ?? undefined,
+    escalationEscalatedAt: row.escalation_escalated_at?.toISOString(),
   };
 
   if (row.resolution_type) {
@@ -249,6 +273,10 @@ export class PostgresDisputeStore implements DisputeStore {
     if (update.status !== undefined) addField("status", update.status);
     if (update.mediator !== undefined) addField("mediator", update.mediator);
     if (update.escalatedAt !== undefined) addField("escalated_at", update.escalatedAt);
+    if (update.escalationTier !== undefined) addField("escalation_tier", update.escalationTier);
+    if (update.escalationEscalatedAt !== undefined) {
+      addField("escalation_escalated_at", update.escalationEscalatedAt);
+    }
     if (update.resolutionError !== undefined) addField("resolution_error", update.resolutionError);
     if (update.resolution !== undefined) {
       addField("resolution_type", update.resolution.type);
@@ -302,6 +330,19 @@ export class PostgresDisputeStore implements DisputeStore {
        AND sla_deadline <= $1
        AND escalated_at IS NULL`,
       [now]
+    );
+    return Promise.all(rows.map((r) => mapDisputeRow(r, client)));
+  }
+
+  async findStalled(now: Date, stalledHours: number): Promise<Dispute[]> {
+    const client = getPool();
+    const cutoff = new Date(now.getTime() - stalledHours * 60 * 60 * 1000);
+    const { rows } = await client.query<DisputeRow>(
+      `SELECT * FROM disputes
+       WHERE status NOT IN ('decided', 'resolved')
+       AND created_at <= $1
+       AND (escalation_tier IS NULL OR escalation_tier = 'tier1')`,
+      [cutoff]
     );
     return Promise.all(rows.map((r) => mapDisputeRow(r, client)));
   }

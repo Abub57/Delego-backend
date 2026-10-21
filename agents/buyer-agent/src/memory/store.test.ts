@@ -1,7 +1,7 @@
 /**
  * User Memory Store tests — Issue #266
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   UserMemoryStore,
   formatMemoriesForSystemPrompt,

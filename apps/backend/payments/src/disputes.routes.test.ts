@@ -7,6 +7,13 @@ import { resetAuditLogStore } from "./disputes/auditLog.js";
 import { resetDisputeStore } from "./disputes/disputeStore.js";
 import { resetReputationStore } from "./disputes/reputationStore.js";
 import { registerRoutes } from "./routes.js";
+import { findPaymentRecordByEscrowId } from "./escrowCoordinator/paymentRecordStore.js";
+
+// Issue #350 — IDOR mitigation on GET /disputes/:disputeId. Mocked so these
+// tests never touch a real Postgres pool.
+vi.mock("./escrowCoordinator/paymentRecordStore.js", () => ({
+  findPaymentRecordByEscrowId: vi.fn(),
+}));
 
 vi.mock("./escrowCoordinator/index.js", async () => {
   const actual = await vi.importActual<typeof import("./escrowCoordinator/index.js")>("./escrowCoordinator/index.js");
@@ -27,9 +34,9 @@ vi.mock("./escrowCoordinator/index.js", async () => {
 
 type MockResponse = ServerResponse & { statusCode: number; body: string };
 
-function createMockReq(body: string): IncomingMessage {
+function createMockReq(body: string, headers: Record<string, string> = {}): IncomingMessage {
   const req = new EventEmitter() as unknown as IncomingMessage;
-  req.headers = { "content-type": "application/json" };
+  req.headers = { "content-type": "application/json", ...headers };
   process.nextTick(() => {
     req.emit("data", Buffer.from(body));
     req.emit("end");
@@ -86,6 +93,7 @@ describe("Partial refund & dispute mediation routes", () => {
     });
     vi.mocked(escrowCoordinator.partialRefundEscrow).mockReset();
     vi.mocked(escrowCoordinator.partialReleaseEscrow).mockReset();
+    vi.mocked(findPaymentRecordByEscrowId).mockReset();
   });
 
   afterEach(() => {
@@ -217,6 +225,87 @@ describe("Partial refund & dispute mediation routes", () => {
     const res = createMockRes();
     await route.handler(createMockReq(""), res, { disputeId: "does-not-exist" });
     expect(res.statusCode).toBe(404);
+  });
+
+  // Issue #350 — IDOR mitigation.
+  it("GET /disputes/:disputeId returns 403 when the requester is not a party to the order", async () => {
+    const openRoute = findRoute("POST", "/escrow/42/disputes");
+    const openReq = createMockReq(JSON.stringify({ initiatedBy: "GBUYER", reason: "Not delivered" }));
+    const openRes = createMockRes();
+    await openRoute.handler(openReq, openRes, { escrowId: "42" });
+    const disputeId = JSON.parse(openRes.body).data.id as string;
+
+    vi.mocked(findPaymentRecordByEscrowId).mockResolvedValue({
+      id: "pr-1",
+      orderId: "order-1",
+      escrowId: "42",
+      escrowContractId: "C...",
+      buyerAddress: "GBUYER",
+      sellerAddress: "GSELLER",
+      tokenContractId: "T...",
+      amountStroops: "1000",
+      status: "disputed",
+      fundTxHash: null,
+      releaseTxHash: null,
+      refundTxHash: null,
+      disputeTxHash: null,
+      releasedAmountStroops: "0",
+      refundedAmountStroops: "0",
+      failureReason: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any);
+
+    const getRoute = findRoute("GET", `/disputes/${disputeId}`);
+    const res = createMockRes();
+    await getRoute.handler(
+      createMockReq("", { "x-requester-address": "GATTACKER" }),
+      res,
+      { disputeId }
+    );
+
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body).error.code).toBe("FORBIDDEN");
+  });
+
+  it("GET /disputes/:disputeId returns 200 when the requester is a party to the order", async () => {
+    const openRoute = findRoute("POST", "/escrow/42/disputes");
+    const openReq = createMockReq(JSON.stringify({ initiatedBy: "GBUYER", reason: "Not delivered" }));
+    const openRes = createMockRes();
+    await openRoute.handler(openReq, openRes, { escrowId: "42" });
+    const disputeId = JSON.parse(openRes.body).data.id as string;
+
+    vi.mocked(findPaymentRecordByEscrowId).mockResolvedValue({
+      id: "pr-1",
+      orderId: "order-1",
+      escrowId: "42",
+      escrowContractId: "C...",
+      buyerAddress: "GBUYER",
+      sellerAddress: "GSELLER",
+      tokenContractId: "T...",
+      amountStroops: "1000",
+      status: "disputed",
+      fundTxHash: null,
+      releaseTxHash: null,
+      refundTxHash: null,
+      disputeTxHash: null,
+      releasedAmountStroops: "0",
+      refundedAmountStroops: "0",
+      failureReason: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any);
+
+    const getRoute = findRoute("GET", `/disputes/${disputeId}`);
+    const res = createMockRes();
+    await getRoute.handler(
+      createMockReq("", { "x-requester-address": "GBUYER" }),
+      res,
+      { disputeId }
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).data.id).toBe(disputeId);
   });
 
   it("POST /disputes/:disputeId/decision returns 409 before the dispute reaches negotiation", async () => {

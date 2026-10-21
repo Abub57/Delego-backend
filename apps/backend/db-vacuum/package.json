@@ -1,0 +1,28 @@
+{
+  "name": "@delegolabs/db-vacuum",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Automated PostgreSQL bloat detection and non-blocking VACUUM ANALYZE worker with monitoring metrics",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'TODO: add eslint'",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@delegolabs/types": "workspace:*",
+    "@delegolabs/utils": "workspace:*",
+    "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.9"
+  }
+}

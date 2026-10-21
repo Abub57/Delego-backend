@@ -21,6 +21,7 @@
 | `sequence_num`-ordered hash chain (`entry_hash`/`prev_hash`) | Real, tested (`packages/utils/src/audit/hashChain.ts`) |
 | `recordAuditEntry` / `queryAuditLog` / `getChainSegment` | Real, tested (`packages/utils/src/audit/auditLogStore.ts`) |
 | `GET /api/v1/admin/audit-log`, `GET /api/v1/admin/audit-log/verify` | Real, tested (`apps/backend/gateway/routes/audit.ts`) |
+| Whole-chain verification CLI (`verifyStoredChain`) | Real, tested (`packages/utils/src/audit/verifyStoredChain.ts`, `apps/backend/gateway/scripts/verify-audit-chain.ts`) |
 | `audit_retention_policies` config table | Real (schema only — stores the policy) |
 | Forwarding audit events to a SIEM | Design only, this document, §2 |
 | Automated archival to S3/cold storage per `RetentionPolicy` | Design only, this document, §3 |
@@ -230,6 +231,21 @@ this job could call directly rather than reimplementing the query), just
 run on a schedule with alerting wired to the result instead of an
 on-demand HTTP call. Not scheduled anywhere in this repo — no job
 scheduler is wired up to invoke it.
+
+For a job that has no HTTP access to the gateway (e.g. a cron running on
+the database host), run the standalone CLI instead — it walks the whole
+stored chain, paging past `getChainSegment`'s 10 000-row default so
+tampering later in the log is still caught, and exits non-zero when the
+chain is broken:
+
+```sh
+pnpm --filter @delegolabs/gateway exec tsx scripts/verify-audit-chain.ts
+```
+
+Add `--to <ISO-8601>` to bound the check to a window ending at a given
+timestamp, or `--json` to emit the machine-readable
+`StoredChainVerificationResult`. Exit codes: `0` intact, `1` broken
+(tampering detected), `2` the check could not run.
 
 ## 5. Load and integration testing (not performed here)
 

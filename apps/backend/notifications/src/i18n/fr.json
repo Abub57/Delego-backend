@@ -24,5 +24,14 @@
   "permission_expiry_updated_body": "La date d'expiration de la permission de dépense accordée à {{delegate}} par {{owner}} a été mise à jour. Nouvelle expiration : {{newExpiry}}.",
 
   "transaction_approval_subject": "Approbation requise pour la commande {{orderId}}",
-  "transaction_approval_body": "Votre agent IA demande l'approbation pour finaliser la commande {{orderId}} d'un montant de {{amount}} auprès de {{merchant}}. Veuillez consulter et approuver sur : {{approvalUrl}}"
+  "transaction_approval_body": "Votre agent IA demande l'approbation pour finaliser la commande {{orderId}} d'un montant de {{amount}} auprès de {{merchant}}. Veuillez consulter et approuver sur : {{approvalUrl}}",
+
+  "sms_out_for_delivery_subject": "La commande {{orderId}} est en cours de livraison",
+  "sms_out_for_delivery_body": "Delego : votre commande {{orderId}} est en cours de livraison aujourd'hui. Suivi : {{trackingNumber}}.",
+
+  "sms_auto_release_warning_subject": "Le séquestre de la commande {{orderId}} sera bientôt libéré",
+  "sms_auto_release_warning_body": "Delego : le séquestre de la commande {{orderId}} (suivi {{trackingNumber}}) sera bientôt versé au marchand. En cas de problème avec votre livraison, ouvrez un litige avant.",
+
+  "sms_refund_processed_subject": "Remboursement effectué pour la commande {{orderId}}",
+  "sms_refund_processed_body": "Delego : le remboursement de la commande {{orderId}} (suivi {{trackingNumber}}) a été effectué."
 }

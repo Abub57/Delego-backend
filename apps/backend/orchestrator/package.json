@@ -21,12 +21,14 @@
     "ioredis": "^5.11.1",
     "pg": "^8.21.0",
     "pg-hstore": "^2.3.4",
+    "redlock": "^4.2.0",
     "sequelize": "^6.37.8",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/pg": "^8.20.0",
+    "@types/redlock": "^4.0.8",
     "ioredis-mock": "^8.13.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

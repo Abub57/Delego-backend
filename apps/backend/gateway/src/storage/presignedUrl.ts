@@ -9,7 +9,7 @@
  * - Purpose-based path organization
  */
 
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, type S3ClientConfig } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createLogger } from "@delegolabs/utils";
 
@@ -38,6 +38,23 @@ export const ALLOWED_CONTENT_TYPES = [
 
 export type AllowedContentType = typeof ALLOWED_CONTENT_TYPES[number];
 
+// Specific strict MIME types for dispute evidence uploads (Issue #357)
+export const DISPUTE_EVIDENCE_ALLOWED_MIME_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "application/pdf",
+] as const;
+
+export type DisputeEvidenceAllowedMimeType = typeof DISPUTE_EVIDENCE_ALLOWED_MIME_TYPES[number];
+
+// Strict extension mapping per MIME type
+export const ALLOWED_EXTENSIONS_BY_MIME: Record<AllowedContentType, string[]> = {
+  "image/jpeg": ["jpg", "jpeg"],
+  "image/png": ["png"],
+  "image/webp": ["webp"],
+  "application/pdf": ["pdf"],
+};
+
 // Purpose types for path organization
 export type UploadPurpose = "product_image" | "dispute_evidence";
 
@@ -45,10 +62,13 @@ export type UploadPurpose = "product_image" | "dispute_evidence";
  * Request interface for pre-signed URL generation.
  */
 export interface PresignedUrlRequest {
-  filename: string;
-  contentType: AllowedContentType;
-  fileSizeBytes: number;
-  purpose: UploadPurpose;
+  filename?: string;
+  fileName?: string;
+  contentType?: AllowedContentType;
+  expectedMimeType?: DisputeEvidenceAllowedMimeType;
+  fileSizeBytes?: number;
+  contentLength?: number;
+  purpose?: UploadPurpose;
 }
 
 /**
@@ -67,31 +87,63 @@ export interface PresignedUrlResponse {
 export function validatePresignedUrlRequest(
   request: PresignedUrlRequest,
 ): { valid: true } | { valid: false; error: string } {
+  const filename = request.fileName || request.filename;
+  const contentType = request.expectedMimeType || request.contentType;
+  const size = request.contentLength !== undefined ? request.contentLength : request.fileSizeBytes;
+  const purpose = request.purpose || "dispute_evidence";
+
   // Validate filename
-  if (!request.filename || typeof request.filename !== "string") {
+  if (!filename || typeof filename !== "string") {
     return { valid: false, error: "filename is required" };
   }
 
   // Check filename doesn't contain path traversal
-  if (request.filename.includes("..") || request.filename.includes("/")) {
+  if (filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
     return { valid: false, error: "filename cannot contain path separators" };
   }
 
   // Validate content type
-  if (!ALLOWED_CONTENT_TYPES.includes(request.contentType as AllowedContentType)) {
-    return { valid: false, error: `Invalid contentType. Must be one of: ${ALLOWED_CONTENT_TYPES.join(", ")}` };
+  if (!contentType || typeof contentType !== "string") {
+    return { valid: false, error: "contentType is required" };
+  }
+
+  if (purpose === "dispute_evidence") {
+    if (!DISPUTE_EVIDENCE_ALLOWED_MIME_TYPES.includes(contentType as DisputeEvidenceAllowedMimeType)) {
+      return {
+        valid: false,
+        error: `Invalid contentType for dispute evidence. Must be one of: ${DISPUTE_EVIDENCE_ALLOWED_MIME_TYPES.join(", ")}`,
+      };
+    }
+  } else {
+    if (!ALLOWED_CONTENT_TYPES.includes(contentType as AllowedContentType)) {
+      return { valid: false, error: `Invalid contentType. Must be one of: ${ALLOWED_CONTENT_TYPES.join(", ")}` };
+    }
+  }
+
+  // Enforce strict file extension allowlist matching the claimed MIME type
+  const ext = filename.split(".").pop()?.toLowerCase();
+  if (!ext || filename.indexOf(".") === -1) {
+    return { valid: false, error: "filename must have a valid file extension" };
+  }
+
+  const allowedExts = ALLOWED_EXTENSIONS_BY_MIME[contentType as AllowedContentType];
+  if (!allowedExts || !allowedExts.includes(ext)) {
+    return {
+      valid: false,
+      error: `File extension ".${ext}" does not match allowed extensions for "${contentType}" (${allowedExts?.map((e) => `.${e}`).join(", ") ?? "none"})`,
+    };
   }
 
   // Validate file size (max 10MB)
-  if (request.fileSizeBytes <= 0) {
+  if (size === undefined || typeof size !== "number" || size <= 0) {
     return { valid: false, error: "fileSizeBytes must be positive" };
   }
-  if (request.fileSizeBytes > MAX_FILE_SIZE_BYTES) {
+  if (size > MAX_FILE_SIZE_BYTES) {
     return { valid: false, error: `fileSizeBytes exceeds maximum of ${MAX_FILE_SIZE_BYTES} bytes (10MB)` };
   }
 
   // Validate purpose
-  if (!["product_image", "dispute_evidence"].includes(request.purpose)) {
+  if (!["product_image", "dispute_evidence"].includes(purpose)) {
     return { valid: false, error: "purpose must be 'product_image' or 'dispute_evidence'" };
   }
 
@@ -114,7 +166,7 @@ export function validatePresignedUrlRequestOrThrow(
  * Get S3 client with configured credentials.
  */
 export function getS3Client(): S3Client {
-  const config: Parameters<typeof S3Client>[0] = {
+  const config: S3ClientConfig = {
     region: REGION,
     credentials: {
       accessKeyId: ACCESS_KEY_ID || "dummy-access-key",
@@ -139,12 +191,17 @@ export async function generatePresignedUrl(
 ): Promise<PresignedUrlResponse> {
   validatePresignedUrlRequestOrThrow(request);
 
+  const filename = request.fileName || request.filename!;
+  const contentType = (request.expectedMimeType || request.contentType)!;
+  const size = request.contentLength !== undefined ? request.contentLength : request.fileSizeBytes!;
+  const purpose = request.purpose || "dispute_evidence";
+
   const client = getS3Client();
 
   // Generate unique object key
   // Format: <purpose>/<timestamp>/<filename>
   const timestamp = Date.now();
-  const objectKey = `${request.purpose}/${timestamp}/${request.filename}`;
+  const objectKey = `${purpose}/${timestamp}/${filename}`;
 
   // Build the public URL
   // For Cloudflare R2: https://<account>.r2.cloudflarestorage.com/<bucket>/<key>
@@ -155,8 +212,8 @@ export async function generatePresignedUrl(
   const command = new PutObjectCommand({
     Bucket: BUCKET_NAME,
     Key: objectKey,
-    ContentType: request.contentType,
-    ContentLength: request.fileSizeBytes,
+    ContentType: contentType,
+    ContentLength: size,
   });
 
   // Generate pre-signed URL
@@ -165,10 +222,10 @@ export async function generatePresignedUrl(
   });
 
   log.info("Generated pre-signed URL", {
-    purpose: request.purpose,
-    filename: request.filename,
-    fileSizeBytes: request.fileSizeBytes,
-    contentType: request.contentType,
+    purpose,
+    filename,
+    fileSizeBytes: size,
+    contentType,
     expiresInSeconds: PRESIGNED_URL_EXPIRY_SECONDS,
   });
 

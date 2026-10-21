@@ -5,8 +5,8 @@ import {
   mapChainEscrowStatus,
   orderIdToContractBytes,
   readEscrowFromChain,
-  submitContractInvocation,
 } from "./contractClient.js";
+import { submitContractInvocationWithRetry } from "./contractInvocationRetry.js";
 import {
   createPaymentRecord,
   findPaymentRecordByEscrowId,
@@ -16,6 +16,7 @@ import {
 } from "./paymentRecordStore.js";
 import { publishPaymentStatusEvent } from "./redisEvents.js";
 import { getEscrowFundingLockManager } from "./escrowFundingLock.js";
+import { checkEscrowVelocity } from "./fraudGuard.js";
 import {
   InsufficientEscrowBalanceError,
   type DisputeEscrowParams,
@@ -131,6 +132,14 @@ export const escrowCoordinator: EscrowCoordinator = {
       });
       return toFundResult(existing);
     }
+    const velocity = await checkEscrowVelocity(params.buyerAddress);
+    if (velocity.paused) {
+      log.warn("Escrow funding blocked: buyer paused pending fraud review", {
+        orderId: params.orderId,
+        buyerAddress: params.buyerAddress,
+      });
+      return { escrowId: "", txHash: "", ledger: 0, status: "failed" };
+    }
 
     // Issue #147 — Use adaptive locking for escrow funding
     const lockManager = getEscrowFundingLockManager();
@@ -153,7 +162,7 @@ export const escrowCoordinator: EscrowCoordinator = {
     });
 
     try {
-      const tx = await submitContractInvocation({
+      const tx = await submitContractInvocationWithRetry({
         sourceAddress: params.buyerAddress,
         contractId: params.escrowContractId,
         method: "deposit",
@@ -239,7 +248,7 @@ export const escrowCoordinator: EscrowCoordinator = {
     await updatePaymentRecord(record.id, { failureReason: null });
 
     try {
-      const tx = await submitContractInvocation({
+      const tx = await submitContractInvocationWithRetry({
         sourceAddress: params.callerAddress,
         contractId: params.escrowContractId,
         method: "release",
@@ -313,7 +322,7 @@ export const escrowCoordinator: EscrowCoordinator = {
     await updatePaymentRecord(record.id, { failureReason: null });
 
     try {
-      const tx = await submitContractInvocation({
+      const tx = await submitContractInvocationWithRetry({
         sourceAddress: params.callerAddress,
         contractId: params.escrowContractId,
         method: "refund",
@@ -395,7 +404,7 @@ export const escrowCoordinator: EscrowCoordinator = {
     await updatePaymentRecord(record.id, { failureReason: null });
 
     try {
-      const tx = await submitContractInvocation({
+      const tx = await submitContractInvocationWithRetry({
         sourceAddress: params.callerAddress,
         contractId: params.escrowContractId,
         method: "dispute",
@@ -466,7 +475,7 @@ export const escrowCoordinator: EscrowCoordinator = {
     await updatePaymentRecord(record.id, { failureReason: null });
 
     try {
-      const tx = await submitContractInvocation({
+      const tx = await submitContractInvocationWithRetry({
         sourceAddress: params.callerAddress,
         contractId: params.escrowContractId,
         method: "partial_refund",
@@ -548,7 +557,7 @@ export const escrowCoordinator: EscrowCoordinator = {
     await updatePaymentRecord(record.id, { failureReason: null });
 
     try {
-      const tx = await submitContractInvocation({
+      const tx = await submitContractInvocationWithRetry({
         sourceAddress: params.callerAddress,
         contractId: params.escrowContractId,
         method: "partial_release",

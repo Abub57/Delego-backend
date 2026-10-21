@@ -72,6 +72,30 @@ The API gateway serves as the single entry point for all client requests.
 - `GET /api/v1/admin/circuit-breakers` - Circuit breaker status
 - `GET /api/docs` - Swagger UI
 
+#### Dynamic Rate Limiting for Unauthenticated Search
+
+Public catalog search endpoints (e.g. `GET /api/v1/search`) are unauthenticated
+and therefore rate limited per client IP using a Redis-backed token bucket to
+prevent competitor data scraping.
+
+Bucket state is stored in Redis under the key `ratelimit:search:{ip}` and follows
+the `SearchRateLimitBucket` shape:
+
+```typescript
+export interface SearchRateLimitBucket {
+  ip: string;
+  remainingTokens: number;
+  refillRatePerSec: number;
+}
+```
+
+- Each IP starts with a full bucket of tokens and refills at `refillRatePerSec`.
+- Every unauthenticated search request consumes one token.
+- When `remainingTokens` reaches zero, the gateway responds with
+  `429 Too Many Requests` and a standard `Retry-After` header indicating how
+  many seconds until the next token is available.
+- Buckets expire automatically once idle so Redis does not grow unbounded.
+
 ### Orchestrator Service (`apps/backend/orchestrator`)
 
 **Package**: `@delegolabs/orchestrator`
@@ -248,6 +272,43 @@ domain events, and publishes them to the Redis bus with exactly-once delivery.
 - `GET /metrics` - Prometheus text metrics
 - `POST /api/v1/cdc/pause` / `POST /api/v1/cdc/resume` - pipeline control
 
+### DB Vacuum Service (`apps/backend/db-vacuum`)
+
+**Package**: `@delegolabs/db-vacuum`
+**Port**: 3022
+**Health Check**: `GET /health`
+
+The DB Vacuum service monitors PostgreSQL for table and index bloat on
+high-churn tables, alerts when dead tuples cross a threshold, and triggers a
+non-blocking `VACUUM ANALYZE`. See [`apps/backend/db-vacuum/README.md`](./db-vacuum/README.md)
+for thresholds, configuration and the full safety rationale.
+
+#### Responsibilities
+
+- Scan `pg_stat_user_tables` (`n_dead_tup` / `n_live_tup`) plus per-index size
+  and scan counts in a single round trip
+- Classify each table onto a `none → critical` severity ladder
+- Raise deduplicated alerts (cooldown per rule + table) when thresholds are crossed
+- Issue `VACUUM (ANALYZE)` for the worst offenders, worst first and capped per pass
+- Report worker metrics and persist a per-table audit trail
+
+#### Safety
+
+- `VACUUM FULL` is impossible by construction — the statement builder has no `full` option
+- Identifiers are validated and quoted, never interpolated; system schemas are refused
+- Runs on a dedicated autocommit connection with a per-statement `statement_timeout`
+- Skips tables already being vacuumed; passes never overlap with each other
+- Unused indexes are reported, never dropped
+- `DB_VACUUM_DRY_RUN=true` assesses and alerts without issuing any statement
+
+#### Endpoints
+
+- `GET /api/v1/db-vacuum/config` - effective thresholds and run config
+- `GET /api/v1/db-vacuum/bloat` - fresh scan + per-table assessments
+- `GET /api/v1/db-vacuum/metrics` - worker metrics
+- `POST /api/v1/db-vacuum/run` - trigger a pass (`409` if one is in flight)
+- `GET /api/v1/db-vacuum/runs` - last run summary
+
 ## Architecture
 
 ### Service Architecture
@@ -329,6 +390,7 @@ pnpm --filter @delegolabs/wallet dev
 pnpm --filter @delegolabs/payments dev
 pnpm --filter @delegolabs/notifications dev
 pnpm --filter @delegolabs/cdc dev
+pnpm --filter @delegolabs/db-vacuum dev
 pnpm --filter @delegolabs/agents dev
 ```
 

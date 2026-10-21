@@ -7,6 +7,7 @@ import { ruleEngine } from "../ruleEngine.js";
 import { mlScorer } from "../mlScorer.js";
 import { caseManagementService } from "../caseManagementService.js";
 import { fraudAnalyticsService } from "../analyticsService.js";
+import { EscrowVelocityService } from "../services/escrowVelocityService.js";
 import { retrainingService } from "../retrainingService.js";
 import { FraudCheckRequest, CreateFraudRuleRequest, UpdateFraudRuleRequest, CreateFraudCaseRequest, UpdateFraudCaseRequest, AddEvidenceRequest } from "../schemas.js";
 
@@ -607,6 +608,64 @@ export async function getTopFraudRulesHandler(req: IncomingMessage, res: ServerR
     json(res, 200, { data: rules, error: null });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to get top fraud rules";
+    sendApiError(res, 500, "INTERNAL_ERROR", message, req);
+  }
+}
+
+/**
+ * POST /api/v1/fraud/escrow-velocity
+ *
+ * Record an escrow creation, evaluate account velocity, and pause the
+ * account + open a fraud case when the threshold is crossed.
+ */
+export async function recordEscrowVelocityHandler(req: IncomingMessage, res: ServerResponse, _params: Record<string, string>): Promise<void> {
+  try {
+    let body: { accountAddress?: string };
+    try {
+      body = (await readJsonBody(req)) as { accountAddress?: string };
+    } catch {
+      sendApiError(res, 400, "VALIDATION_ERROR", "Invalid JSON body", req);
+      return;
+    }
+
+    if (!body.accountAddress) {
+      sendApiError(res, 400, "VALIDATION_ERROR", "accountAddress is required", req);
+      return;
+    }
+
+    const velocityService = new EscrowVelocityService();
+    try {
+      let paused = await velocityService.isPaused(body.accountAddress);
+
+      if (!paused) {
+        await velocityService.recordEscrowCreation(body.accountAddress);
+      }
+      const metric = await velocityService.getVelocity(body.accountAddress);
+
+      if (!paused && metric.isFlagged) {
+        paused = true;
+        if (await velocityService.pauseAccount(body.accountAddress)) {
+          const fraudCase = await caseManagementService.createCase({
+            transactionId: `velocity:${body.accountAddress}:${Date.now()}`,
+            priority: "high",
+          });
+          await caseManagementService.addEvidence(fraudCase.id, {
+            type: "escrow_velocity",
+            data: { ...metric },
+            addedBy: "system",
+          });
+        }
+      }
+
+      json(res, 200, {
+        data: { ...metric, paused, reviewRequired: paused },
+        error: null,
+      });
+    } finally {
+      await velocityService.close();
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to evaluate escrow velocity";
     sendApiError(res, 500, "INTERNAL_ERROR", message, req);
   }
 }

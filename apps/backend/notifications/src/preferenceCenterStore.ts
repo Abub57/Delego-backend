@@ -7,6 +7,7 @@ import {
   getDefaultNotificationPreference,
   resolveEffectivePreference,
   applyPreferenceUpdate,
+  upgradeLegacyWhatsappPreference,
   type NotificationPreference,
   type PreferenceUpdate,
 } from "./preferenceCenter.js";
@@ -46,8 +47,9 @@ function rowToStored(row: PreferenceRow): StoredPreference {
     userId: row.user_id,
     orgId: row.org_id,
     version: row.version,
-    preferences:
-      row.preferences ?? getDefaultNotificationPreference(row.user_id, row.org_id ?? undefined),
+    preferences: row.preferences
+      ? upgradeLegacyWhatsappPreference(row.preferences)
+      : getDefaultNotificationPreference(row.user_id, row.org_id ?? undefined),
   };
 }
 
@@ -109,7 +111,7 @@ export async function getOrgDefaultPreference(
     [orgId]
   );
   if (result.rows.length === 0) return null;
-  return (result.rows[0] as OrgPreferenceRow).preferences;
+  return upgradeLegacyWhatsappPreference((result.rows[0] as OrgPreferenceRow).preferences);
 }
 
 export async function upsertOrgDefaultPreference(

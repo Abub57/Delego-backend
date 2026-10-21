@@ -21,7 +21,11 @@ export interface OrderLineItem {
   name?: string;
   productId?: string;
   price?: number;
-  unitPriceStroops?: any;
+  /**
+   * Stroop amount as a decimal integer string (#338) — never a `number`,
+   * which loses precision for i128 amounts beyond 2^53 - 1.
+   */
+  unitPriceStroops?: string;
   quantity: number;
 }
 
@@ -62,8 +66,12 @@ export interface Order {
   delegationId: string;
   merchantId?: string;
   merchantName?: string;
-  amount?: any;
-  totalStroops?: any;
+  amount?: string;
+  /**
+   * Stroop amount as a decimal integer string (#338) — never a `number`,
+   * which loses precision for i128 amounts beyond 2^53 - 1.
+   */
+  totalStroops?: string;
   currency?: string;
   status: OrderStatus;
   lineItems?: OrderLineItem[];

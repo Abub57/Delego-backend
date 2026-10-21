@@ -23,6 +23,7 @@ class FakeRedis implements RateLimitRedisClient {
     now: number,
     windowMs: number,
     maxRequests: number,
+    burstAllowance: number,
     cost: number,
   ): Promise<[number, number, number]> {
     const windowStart = now - windowMs;
@@ -30,7 +31,7 @@ class FakeRedis implements RateLimitRedisClient {
 
     let allowed = 0;
     let count = existing.length;
-    if (count + cost <= maxRequests) {
+    if (count + cost <= maxRequests + burstAllowance) {
       for (let i = 0; i < cost; i++) existing.push(now);
       allowed = 1;
       count = existing.length;
@@ -47,6 +48,7 @@ const rule: RateLimitRule = {
   limits: [
     { tier: "default", windowMs: 1000, maxRequests: 3 },
     { tier: "premium", windowMs: 1000, maxRequests: 10 },
+    { tier: "bursty", windowMs: 1000, maxRequests: 2, burstAllowance: 2 },
   ],
   exemptKeys: ["internal-service"],
 };
@@ -122,6 +124,33 @@ describe("SlidingWindowRateLimiter", () => {
     await expect(
       limiter.check(rule, { key: "user-e", tier: "nonexistent" }),
     ).rejects.toThrow(/No rate limit tier/);
+  });
+
+  it("admits a tier's burst allowance above its steady-state limit", async () => {
+    // maxRequests 2 + burstAllowance 2 admits up to 4 requests in the window.
+    const results = [];
+    for (let i = 0; i < 4; i++) {
+      results.push(await limiter.check(rule, { key: "user-burst", tier: "bursty" }));
+    }
+
+    expect(results.map((r) => r.allowed)).toEqual([true, true, true, true]);
+    // The advertised limit stays the steady-state quota, and remaining floors
+    // at 0 once the caller is spending its burst allowance.
+    expect(results[0].headers["X-RateLimit-Limit"]).toBe("2");
+    expect(results[2].remaining).toBe(0);
+    expect(results[3].remaining).toBe(0);
+  });
+
+  it("denies once steady-state plus burst are exhausted and reports Retry-After", async () => {
+    for (let i = 0; i < 4; i++) {
+      await limiter.check(rule, { key: "user-burst-2", tier: "bursty" });
+    }
+
+    const denied = await limiter.check(rule, { key: "user-burst-2", tier: "bursty" });
+    expect(denied.allowed).toBe(false);
+    expect(denied.remaining).toBe(0);
+    expect(denied.retryAfterMs).toBeGreaterThan(0);
+    expect(Number(denied.headers["Retry-After"])).toBeGreaterThan(0);
   });
 
   it("includes RFC 6585-style headers", async () => {

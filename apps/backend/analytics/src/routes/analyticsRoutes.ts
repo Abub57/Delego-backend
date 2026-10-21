@@ -1,8 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createTransactionHistoryRowStream, TRANSACTION_HISTORY_CSV_HEADERS } from "../services/transactionHistoryStream.js";
+import { streamCsvExport } from "../services/csvExportService.js";
 import { json, readBodyWithLimit } from "@delegolabs/utils";
 import { extractAuth } from "../../../gateway/middleware/auth.js";
 import { sendApiError, unauthorized } from "../../../gateway/src/errors.js";
 import { analyticsService } from "../services/analyticsService.js";
+import { merchantReputationService } from "../services/merchantReputationService.js";
 import { abTestService } from "../services/abTestService.js";
 import { cohortService } from "../services/cohortService.js";
 import { revenueService } from "../services/revenueService.js";
@@ -366,6 +369,59 @@ export async function trackCustomEventHandler(req: IncomingMessage, res: ServerR
 }
 
 /**
+ * GET /api/v1/analytics/export/transactions.csv
+ *
+ * Stream the transaction history as CSV directly to the HTTP response in
+ * chunks — Issue #395. The database is read one page at a time (keyset
+ * pagination) and rows are serialized on the fly, so memory stays flat even
+ * for 100k+ row exports.
+ *
+ * Query params (all optional):
+ *   userId      - Filter by user ID
+ *   templateId  - Filter by template ID
+ *   channel     - Filter by channel (email, push, sms, in-app)
+ *   eventType   - Filter by event type (sent, delivered, opened, ...)
+ *   periodStart - ISO-8601 lower bound on timestamp (inclusive)
+ *   periodEnd   - ISO-8601 upper bound on timestamp (inclusive)
+ *   pageSize    - DB page size (default 1000, max 5000)
+ *   maxRows     - Hard cap on exported rows
+ */
+export async function exportTransactionsCsvHandler(req: IncomingMessage, res: ServerResponse, _params: Record<string, string>): Promise<void> {
+  const auth = extractAuth(req);
+  if (!auth.userId) {
+    unauthorized(res, "Authentication required", req);
+    return;
+  }
+
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+
+  const pageSize = Math.min(Math.max(Number(url.searchParams.get("pageSize")) || 1000, 1), 5000);
+  const maxRowsParam = url.searchParams.get("maxRows");
+  const maxRows = maxRowsParam ? Math.max(Number(maxRowsParam) || 0, 0) || undefined : undefined;
+
+  const queryStream = createTransactionHistoryRowStream({
+    pageSize,
+    ...(maxRows !== undefined ? { maxRows } : {}),
+    filters: {
+      userId: url.searchParams.get("userId") || undefined,
+      templateId: url.searchParams.get("templateId") || undefined,
+      channel: url.searchParams.get("channel") || undefined,
+      eventType: url.searchParams.get("eventType") || undefined,
+      periodStart: url.searchParams.get("periodStart") || undefined,
+      periodEnd: url.searchParams.get("periodEnd") || undefined,
+    },
+  });
+
+  // Fire-and-forget per the issue spec (`streamCsvExport(...): void`): the
+  // pipeline runs in the background; errors are logged and the response is
+  // torn down inside streamCsvExportAsync.
+  streamCsvExport(queryStream, res, {
+    headers: TRANSACTION_HISTORY_CSV_HEADERS,
+    filename: "transaction-history.csv",
+  });
+}
+
+/**
  * POST /api/v1/analytics/export
  *
  * Export data to data warehouse
@@ -433,5 +489,94 @@ export async function getRevenueMetricsHandler(req: IncomingMessage, res: Server
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to fetch revenue metrics";
     sendApiError(res, 500, "INTERNAL_ERROR", message, req);
+  }
+}
+
+/**
+ * GET /api/v1/analytics/merchants/:merchantId/quality-score
+ *
+ * #392 — Merchant reputation weight: a normalized 0-100 composite score
+ * factoring in dispute frequency, fulfillment/on-time rate, and
+ * cancellation rate. Cached in Redis; see merchantReputationService.
+ *
+ * Query params:
+ *   periodStart - Only consider orders created on/after this ISO-8601 timestamp
+ *   periodEnd   - Only consider orders created on/before this ISO-8601 timestamp
+ */
+export async function getMerchantQualityScoreHandler(req: IncomingMessage, res: ServerResponse, params: Record<string, string>): Promise<void> {
+  const auth = extractAuth(req);
+  if (!auth.userId) {
+    unauthorized(res, "Authentication required", req);
+    return;
+  }
+
+  const merchantId = params["merchantId"];
+  if (!merchantId) {
+    sendApiError(res, 400, "VALIDATION_ERROR", "merchantId is required", req);
+    return;
+  }
+
+  try {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const periodStart = url.searchParams.get("periodStart") || undefined;
+    const periodEnd = url.searchParams.get("periodEnd") || undefined;
+
+    const metrics = await merchantReputationService.getMerchantQualityMetrics({ merchantId, periodStart, periodEnd });
+
+    json(res, 200, { data: metrics, error: null });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to compute merchant quality score";
+    sendApiError(res, 500, "INTERNAL_ERROR", message, req);
+  }
+}
+
+/**
+ * GET /api/v1/analytics/merchants/:merchantId/sales (Issue #377)
+ *
+ * Query continuous aggregate sales metrics for a merchant.
+ *
+ * Query params:
+ *   interval  - Time bucket ('1m', '1h', '1d', default '1h')
+ *   startTime - ISO 8601 start timestamp
+ *   endTime   - ISO 8601 end timestamp
+ *   limit     - Max number of data points (default 100)
+ */
+export async function getMerchantSalesHandler(
+  req: IncomingMessage,
+  res: ServerResponse,
+  params: Record<string, string>
+): Promise<void> {
+  const auth = extractAuth(req);
+  if (!auth.userId) {
+    unauthorized(res, "Authentication required", req);
+    return;
+  }
+
+  const merchantId = params.merchantId;
+  if (!merchantId) {
+    sendApiError(res, 400, "VALIDATION_ERROR", "merchantId is required", req);
+    return;
+  }
+
+  try {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const intervalParam = url.searchParams.get("interval") as any;
+    const interval = ["1m", "1h", "1d"].includes(intervalParam) ? intervalParam : "1h";
+    const startTime = url.searchParams.get("startTime") || undefined;
+    const endTime = url.searchParams.get("endTime") || undefined;
+    const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined;
+
+    const { merchantAnalyticsService } = await import("../services/merchantAnalyticsService.js");
+    const result = await merchantAnalyticsService.getMerchantSales({
+      merchantId,
+      bucketInterval: interval,
+      startTime,
+      endTime,
+      limit,
+    });
+
+    json(res, 200, { data: result, error: null });
+  } catch (err: any) {
+    sendApiError(res, 500, "INTERNAL_ERROR", err.message, req);
   }
 }

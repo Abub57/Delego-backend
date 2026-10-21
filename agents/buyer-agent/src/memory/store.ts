@@ -242,7 +242,7 @@ export class UserMemoryStore {
     const params: unknown[] = [userId];
 
     if (keywords.length > 0) {
-      const likeClauses = keywords.map((kw, i) => {
+      const likeClauses = keywords.map((kw, _i) => {
         params.push(`%${kw}%`);
         return `(value ILIKE $${params.length} OR key ILIKE $${params.length})`;
       });

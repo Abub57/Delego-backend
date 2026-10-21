@@ -25,3 +25,20 @@ startHttpServer({
 export { checkRateLimit } from './rateLimiter.js';
 export { getRedisClient, disconnectRedis } from './redisClient.js';
 export { getRateLimitConfig } from './config.js';
+export * from './adaptive.js';
+export {
+  TENANT_RATE_LIMIT_TIERS,
+  TENANT_WINDOW_MS,
+  DEFAULT_TENANT_TIER,
+  resolveTenantTier,
+  buildTenantRule,
+  type RateLimitTier as TenantRateLimitTier,
+  type TenantTierName,
+} from './tenantTiers.js';
+export {
+  TenantRateLimiter,
+  InMemorySlidingWindowClient,
+  defaultTenantRateLimitClient,
+  type TenantRateLimitDecision,
+  type TenantRateLimitOptions,
+} from './tenantRateLimiter.js';

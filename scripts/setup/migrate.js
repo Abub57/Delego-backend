@@ -200,6 +200,7 @@ async function ensureTrackingTable(client) {
 async function applyMigration(client, file) {
   await client.query("BEGIN");
   try {
+    await client.query("SET lock_timeout = '5s'");
     await client.query(file.sql);
     await client.query(
       `INSERT INTO schema_migrations (filename, migration_group, version, checksum)
@@ -222,6 +223,7 @@ async function rollbackMigration(client, file) {
   }
   await client.query("BEGIN");
   try {
+    await client.query("SET lock_timeout = '5s'");
     await client.query(file.downSql);
     await client.query("DELETE FROM schema_migrations WHERE filename = $1", [file.filename]);
     await client.query("COMMIT");

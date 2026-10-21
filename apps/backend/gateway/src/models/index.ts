@@ -6,6 +6,15 @@ import { DelegationPolicy } from "./DelegationPolicy.js";
 import { PermissionLevel } from "./PermissionLevel.js";
 import { RefreshToken } from "./RefreshToken.js";
 import { OAuthAccount } from "./OAuthAccount.js";
+import { PasskeyCredential } from "./PasskeyCredential.js";
+import { PasskeyChallenge } from "./PasskeyChallenge.js";
+import { Product } from "./Product.js";
+import { ProductVariant } from "./ProductVariant.js";
+import { Review } from "./Review.js";
+import { ReviewAppeal } from "./ReviewAppeal.js";
+import { DeliveryEvidence } from "./DeliveryEvidence.js";
+import { PaymentRecord } from "./PaymentRecord.js";
+import { Merchant } from "./Merchant.js";
 
 // User <-> Wallet (One-to-Many)
 User.hasMany(Wallet, { foreignKey: "userId", as: "wallets" });
@@ -27,6 +36,10 @@ RefreshToken.belongsTo(User, { foreignKey: "userId", as: "user" });
 User.hasMany(OAuthAccount, { foreignKey: "userId", as: "oauthAccounts" });
 OAuthAccount.belongsTo(User, { foreignKey: "userId", as: "user" });
 
+// User <-> PasskeyCredential (One-to-Many) — Issue #367
+User.hasMany(PasskeyCredential, { foreignKey: "userId", as: "passkeys" });
+PasskeyCredential.belongsTo(User, { foreignKey: "userId", as: "user" });
+
 // Wallet <-> SpendLimit (One-to-Many)
 Wallet.hasMany(SpendLimit, { foreignKey: "walletId", as: "spendLimits" });
 SpendLimit.belongsTo(Wallet, { foreignKey: "walletId", as: "wallet" });
@@ -43,6 +56,34 @@ DelegationPolicy.belongsTo(Delegation, { foreignKey: "delegationId", as: "delega
 Delegation.hasOne(PermissionLevel, { foreignKey: "delegationId", as: "permissionLevel" });
 PermissionLevel.belongsTo(Delegation, { foreignKey: "delegationId", as: "delegation" });
 
+// User <-> Merchant (One-to-Many)
+User.hasMany(Merchant, { foreignKey: "ownerUserId", as: "merchants" });
+Merchant.belongsTo(User, { foreignKey: "ownerUserId", as: "owner" });
+
+// Merchant <-> Product (One-to-Many)
+Merchant.hasMany(Product, { foreignKey: "merchantId", as: "products" });
+Product.belongsTo(Merchant, { foreignKey: "merchantId", as: "merchant" });
+
+// Product <-> ProductVariant (One-to-Many)
+Product.hasMany(ProductVariant, { foreignKey: "productId", as: "variants" });
+ProductVariant.belongsTo(Product, { foreignKey: "productId", as: "product" });
+
+// Product <-> Review (One-to-Many)
+Product.hasMany(Review, { foreignKey: "productId", as: "reviews" });
+Review.belongsTo(Product, { foreignKey: "productId", as: "product" });
+
+// Review <-> ReviewAppeal (One-to-One)
+Review.hasOne(ReviewAppeal, { foreignKey: "reviewId", as: "appeal" });
+ReviewAppeal.belongsTo(Review, { foreignKey: "reviewId", as: "review" });
+
+// Merchant <-> ReviewAppeal (One-to-Many)
+Merchant.hasMany(ReviewAppeal, { foreignKey: "merchantId", as: "appeals" });
+ReviewAppeal.belongsTo(Merchant, { foreignKey: "merchantId", as: "merchant" });
+
+// PaymentRecord associations (for review buyer verification)
+PaymentRecord.hasMany(Review, { foreignKey: "orderId", targetKey: "orderId", as: "reviews" });
+Review.belongsTo(PaymentRecord, { foreignKey: "orderId", targetKey: "orderId", as: "payment" });
+
 export {
   User,
   Wallet,
@@ -52,4 +93,13 @@ export {
   PermissionLevel,
   RefreshToken,
   OAuthAccount,
+  PasskeyCredential,
+  PasskeyChallenge,
+  Product,
+  ProductVariant,
+  Review,
+  ReviewAppeal,
+  DeliveryEvidence,
+  PaymentRecord,
+  Merchant,
 };

@@ -1,6 +1,10 @@
 import { describe, expect, it, afterEach, vi } from "vitest";
-import { createHealthRoutes, type Route } from "@delegolabs/utils";
-import { createGatewayHealthRegistry } from "../src/health.js";
+import type { Route } from "@delegolabs/utils";
+import {
+  createGatewayHealthRegistry,
+  type GatewayHealthOptions,
+} from "../src/health.js";
+import { createGatewayHealthRoutes } from "./health.js";
 
 type RouteHandler = (
   req: import("node:http").IncomingMessage,
@@ -14,7 +18,7 @@ function findHandler(routes: Route[], path: string): RouteHandler {
   return route.handler;
 }
 
-function capture(handler: RouteHandler, path: string): () => { status: number; body: string } {
+function capture(handler: RouteHandler, path: string): () => Promise<{ status: number; body: string }> {
   const res = {
     statusCode: 0,
     body: "",
@@ -38,15 +42,25 @@ function capture(handler: RouteHandler, path: string): () => { status: number; b
   return () => settled;
 }
 
-function makeRoutes(): Route[] {
-  return createHealthRoutes({
-    registry: createGatewayHealthRegistry({
-      checkDatabase: async () => 2,
-      checkRedis: async () => ({ status: "ok", pingMs: 1 }),
-      fetchImpl: (async () => new Response("ok", { status: 200 })) as typeof fetch,
-    }),
-    serviceName: "gateway",
+/** Responds like every dependency being up (Horizon, Soroban RPC, downstreams). */
+function healthyFetch(): typeof fetch {
+  return (async (input: unknown) => {
+    const url = String(input);
+    if (url.includes("rpc") || url.includes("soroban")) {
+      return new Response(JSON.stringify({ result: { status: "healthy" } }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ data: { status: "ok" } }), { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
+function makeRoutes(overrides: GatewayHealthOptions = {}): Route[] {
+  const registry = createGatewayHealthRegistry({
+    checkDatabase: async () => 2,
+    checkRedis: async () => ({ status: "ok", pingMs: 1 }),
+    fetchImpl: healthyFetch(),
+    ...overrides,
   });
+  return createGatewayHealthRoutes(registry);
 }
 
 describe("gateway health routes", () => {
@@ -54,41 +68,73 @@ describe("gateway health routes", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers live, ready, aggregate, dashboard, metrics and config routes", () => {
+  it("registers live, ready, aggregate, dashboard, metrics and config routes once each", () => {
     const routes = makeRoutes();
-    expect(routes.some((r) => r.pattern.test("/health/live"))).toBe(true);
-    expect(routes.some((r) => r.pattern.test("/health/ready"))).toBe(true);
-    expect(routes.some((r) => r.pattern.test("/health"))).toBe(true);
-    expect(routes.some((r) => r.pattern.test("/health/dashboard"))).toBe(true);
-    expect(routes.some((r) => r.pattern.test("/health/metrics"))).toBe(true);
-    expect(routes.some((r) => r.pattern.test("/health/config"))).toBe(true);
+    for (const path of [
+      "/health/live",
+      "/health/ready",
+      "/health",
+      "/health/dashboard",
+      "/health/metrics",
+      "/health/config",
+    ]) {
+      expect(routes.filter((r) => r.pattern.test(path))).toHaveLength(1);
+    }
   });
 
-  it("/health/live returns 200 with ok status", async () => {
+  it("/health/live returns 200 with a healthy report and no dependency probing", async () => {
     const routes = makeRoutes();
     const result = await capture(findHandler(routes, "/health/live"), "/health/live")();
     expect(result.status).toBe(200);
     const body = JSON.parse(result.body);
-    expect(body.data.status).toBe("ok");
-    expect(body.data.service).toBe("gateway");
+    expect(body.data.status).toBe("healthy");
+    expect(body.data.checks.process).toEqual({ status: true, latencyMs: 0 });
+    expect(body.error).toBeNull();
   });
 
-  it("/health/ready returns 200 when dependencies are healthy", async () => {
+  it("/health/ready returns 200 and the HealthCheckReport shape when dependencies are healthy", async () => {
     const routes = makeRoutes();
     const result = await capture(findHandler(routes, "/health/ready"), "/health/ready")();
     expect(result.status).toBe(200);
     const body = JSON.parse(result.body);
-    expect(body.data.status).toBe("ok");
-    expect(body.data.checks.length).toBe(5);
+    expect(body.data.status).toBe("healthy");
+    expect(Object.keys(body.data.checks).sort()).toEqual([
+      "horizon",
+      "orchestrator",
+      "payments",
+      "postgresql",
+      "redis",
+      "sorobanRpc",
+      "wallet",
+    ]);
+    expect(body.data.checks.postgresql.status).toBe(true);
+    expect(typeof body.data.checks.postgresql.latencyMs).toBe("number");
   });
 
-  it("/health returns the aggregate with legacy status values", async () => {
-    const routes = makeRoutes();
-    const result = await capture(findHandler(routes, "/health"), "/health")();
+  it("/health/ready returns 503 when a critical dependency is unhealthy", async () => {
+    const routes = makeRoutes({
+      checkDatabase: async () => {
+        throw new Error("connection refused");
+      },
+    });
+    const result = await capture(findHandler(routes, "/health/ready"), "/health/ready")();
+    expect(result.status).toBe(503);
+    const body = JSON.parse(result.body);
+    expect(body.data.status).toBe("unhealthy");
+    expect(body.data.checks.postgresql.status).toBe(false);
+  });
+
+  it("/health/ready degrades (200) when only Stellar dependencies are down", async () => {
+    const routes = makeRoutes({
+      fetchImpl: (async () => {
+        throw new Error("ECONNREFUSED");
+      }) as typeof fetch,
+    });
+    const result = await capture(findHandler(routes, "/health/ready"), "/health/ready")();
     expect(result.status).toBe(200);
     const body = JSON.parse(result.body);
-    expect(body.data.status).toBe("ok");
-    expect(body.data.checks[0].name).toBe("postgresql");
-    expect(body.error).toBeNull();
+    expect(body.data.status).toBe("degraded");
+    expect(body.data.checks.horizon.status).toBe(false);
+    expect(body.data.checks.sorobanRpc.status).toBe(false);
   });
 });

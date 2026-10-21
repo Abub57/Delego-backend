@@ -114,3 +114,6 @@ export interface AuditLog {
   userId?: string;
   timestamp: string;
 }
+
+export interface LedgerReconciliationDiscrepancy { escrowId: string; dbAmount: bigint; onChainAmount: bigint; difference: bigint; }
+

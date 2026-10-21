@@ -2,7 +2,7 @@ import { ReconciliationJob } from "../models/ReconciliationJob.js";
 import { ReconciliationRecord } from "../models/ReconciliationRecord.js";
 import { ReconciliationReport } from "../models/ReconciliationReport.js";
 import { AuditLog } from "../models/AuditLog.js";
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, addDecimalStrings } from "@delegolabs/utils";
 import { sequelize } from "../db.js";
 import { Op } from "sequelize";
 
@@ -155,7 +155,7 @@ export class ReconciliationJobService {
 
     const byType: Record<string, { count: number; amount: string }> = {};
     const byCurrency: Record<string, { count: number; amount: string }> = {};
-    const discrepancyCounts: Record<string, { count: number; totalAmount: number }> = {};
+    const discrepancyCounts: Record<string, { count: number; totalAmount: string }> = {};
 
     for (const record of records) {
       // By type
@@ -164,23 +164,28 @@ export class ReconciliationJobService {
         byType[key] = { count: 0, amount: "0" };
       }
       byType[key].count++;
-      byType[key].amount = (parseFloat(byType[key].amount) + parseFloat(record.internalAmount)).toString();
+      // Exact BigInt-backed addition — `parseFloat` silently loses precision
+      // on stroop amounts exceeding 2^53 - 1 (#338).
+      byType[key].amount = addDecimalStrings(byType[key].amount, record.internalAmount);
 
       // By currency
       if (!byCurrency[record.currency]) {
         byCurrency[record.currency] = { count: 0, amount: "0" };
       }
       byCurrency[record.currency].count++;
-      byCurrency[record.currency].amount = (parseFloat(byCurrency[record.currency].amount) + parseFloat(record.internalAmount)).toString();
+      byCurrency[record.currency].amount = addDecimalStrings(byCurrency[record.currency].amount, record.internalAmount);
 
       // Discrepancies by type
       if (record.discrepancyType) {
         if (!discrepancyCounts[record.discrepancyType]) {
-          discrepancyCounts[record.discrepancyType] = { count: 0, totalAmount: 0 };
+          discrepancyCounts[record.discrepancyType] = { count: 0, totalAmount: "0" };
         }
         discrepancyCounts[record.discrepancyType].count++;
         if (record.discrepancyAmount) {
-          discrepancyCounts[record.discrepancyType].totalAmount += parseFloat(record.discrepancyAmount);
+          discrepancyCounts[record.discrepancyType].totalAmount = addDecimalStrings(
+            discrepancyCounts[record.discrepancyType].totalAmount,
+            record.discrepancyAmount
+          );
         }
       }
     }
@@ -189,7 +194,7 @@ export class ReconciliationJobService {
       .map(([type, data]) => ({
         type,
         count: data.count,
-        totalAmount: data.totalAmount.toFixed(2),
+        totalAmount: data.totalAmount,
       }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 10);

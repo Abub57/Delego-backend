@@ -241,6 +241,8 @@ export interface PermissionsService {
   grant(grant: PermissionGrant & { owner?: string }, owner?: string): Promise<string>;
   /** Owner revokes a spender's permission */
   revoke(contractId: string, spender: string, owner?: string): Promise<void>;
+  /** Owner revokes multiple spenders through sequence-safe contract submissions */
+  revokeBatch(contractId: string, spenders: string[], owner?: string): Promise<void>;
   /** All active grants for an owner, read from contract storage */
   list(owner: string, contractId?: string): Promise<PermissionGrant[]>;
   /** Single grant lookup; null when none exists */
@@ -594,6 +596,20 @@ export function createPermissionsService(
       });
     },
 
+    async revokeBatch(
+      contractIdInput: string,
+      spenderInputs: string[],
+      explicitOwner?: string,
+    ): Promise<void> {
+      if (spenderInputs.length === 0) return;
+      const owner = resolveOwner(explicitOwner);
+      const contractId = resolveContractId(contractIdInput);
+      const spenders = [...new Set(spenderInputs.map(validateSpender))];
+      for (const spender of spenders) {
+        await this.revoke(contractId, spender, owner);
+      }
+    },
+
     async get(
       contractIdInput: string,
       ownerInput: string,
@@ -829,6 +845,9 @@ export const permissionsService: PermissionsService = {
   },
   revoke(...args) {
     return getDefaultPermissionsService().revoke(...args);
+  },
+  revokeBatch(...args) {
+    return getDefaultPermissionsService().revokeBatch(...args);
   },
   list(...args) {
     return getDefaultPermissionsService().list(...args);

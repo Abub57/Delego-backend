@@ -1,8 +1,20 @@
-import { describe, expect, it } from "vitest";
-import { createGatewayHealthRegistry } from "./health.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ServiceHealth } from "@delegolabs/utils";
+import {
+  buildGatewayHealthReport,
+  createGatewayHealthRegistry,
+  toHealthCheckReport,
+} from "./health.js";
 
-function okFetch(): typeof fetch {
-  return (async () => new Response(JSON.stringify({ data: { status: "ok" } }), { status: 200 })) as typeof fetch;
+/** Responds like every dependency being up (Horizon, Soroban RPC, downstreams). */
+function healthyFetch(): typeof fetch {
+  return (async (input: unknown) => {
+    const url = String(input);
+    if (url.includes("rpc") || url.includes("soroban")) {
+      return new Response(JSON.stringify({ result: { status: "healthy" } }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ data: { status: "ok" } }), { status: 200 });
+  }) as unknown as typeof fetch;
 }
 
 function failingFetch(): typeof fetch {
@@ -12,21 +24,39 @@ function failingFetch(): typeof fetch {
 }
 
 describe("createGatewayHealthRegistry", () => {
-  it("registers postgresql, redis and the downstream services", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("registers postgresql, redis, horizon, soroban RPC and the downstream services", () => {
     const registry = createGatewayHealthRegistry({});
-    expect(registry.names).toEqual(["postgresql", "redis", "orchestrator", "wallet", "payments"]);
+    expect(registry.names).toEqual([
+      "postgresql",
+      "redis",
+      "horizon",
+      "sorobanRpc",
+      "orchestrator",
+      "wallet",
+      "payments",
+    ]);
   });
 
   it("reports healthy when all dependencies are healthy", async () => {
     const registry = createGatewayHealthRegistry({
       checkDatabase: async () => 3,
       checkRedis: async () => ({ status: "ok", pingMs: 1 }),
-      fetchImpl: okFetch(),
+      fetchImpl: healthyFetch(),
     });
-    const health = await registry.getServiceHealth("gateway", "0.0.1");
-    expect(health.status).toBe("healthy");
-    expect(health.checks[0].details?.latencyMs).toBe(3);
-    expect(health.checks[1].details?.pingMs).toBe(1);
+    const report = await buildGatewayHealthReport(registry);
+
+    expect(report.status).toBe("healthy");
+    expect(report.checks.postgresql.status).toBe(true);
+    expect(Number.isFinite(report.checks.postgresql.latencyMs)).toBe(true);
+    expect(report.checks.redis.status).toBe(true);
+    expect(report.checks.horizon.status).toBe(true);
+    expect(report.checks.sorobanRpc.status).toBe(true);
+    // The DB probe still exposes the query latency measured by checkDatabaseHealth.
+    expect(registry.peek("postgresql")?.details?.latencyMs).toBe(3);
   });
 
   it("fails readiness when the database is down (critical)", async () => {
@@ -35,33 +65,78 @@ describe("createGatewayHealthRegistry", () => {
         throw new Error("connection refused");
       },
       checkRedis: async () => ({ status: "ok", pingMs: 1 }),
-      fetchImpl: okFetch(),
+      fetchImpl: healthyFetch(),
     });
-    const health = await registry.getServiceHealth("gateway", "0.0.1", { readiness: true });
-    expect(health.status).toBe("unhealthy");
-    expect(health.checks[0].status).toBe("unhealthy");
+    const report = await buildGatewayHealthReport(registry);
+
+    expect(report.status).toBe("unhealthy");
+    expect(report.checks.postgresql.status).toBe(false);
   });
 
-  it("degrades (but stays ready) when only a downstream service is unreachable", async () => {
+  it("degrades (but stays ready) when only Stellar dependencies are unreachable", async () => {
     const registry = createGatewayHealthRegistry({
       checkDatabase: async () => 2,
       checkRedis: async () => ({ status: "ok", pingMs: 1 }),
       fetchImpl: failingFetch(),
     });
-    const health = await registry.getServiceHealth("gateway", "0.0.1", { readiness: true });
-    expect(health.status).toBe("degraded");
-    const downstream = health.checks.find((c) => c.name === "wallet");
-    expect(downstream?.status).toBe("degraded");
+    const report = await buildGatewayHealthReport(registry);
+
+    expect(report.status).toBe("degraded");
+    expect(report.checks.horizon.status).toBe(false);
+    expect(report.checks.sorobanRpc.status).toBe(false);
   });
 
   it("reports degraded for redis failures", async () => {
     const registry = createGatewayHealthRegistry({
       checkDatabase: async () => 2,
       checkRedis: async () => ({ status: "degraded", error: "timeout" }),
-      fetchImpl: okFetch(),
+      fetchImpl: healthyFetch(),
     });
-    const health = await registry.getServiceHealth("gateway", "0.0.1");
-    expect(health.status).toBe("degraded");
-    expect(health.checks.find((c) => c.name === "redis")?.details?.error).toBe("timeout");
+    const report = await buildGatewayHealthReport(registry);
+
+    expect(report.status).toBe("degraded");
+    expect(report.checks.redis.status).toBe(false);
+    expect(registry.peek("redis")?.details?.error).toBe("timeout");
+  });
+
+  it("times out a dependency that never responds", async () => {
+    vi.useFakeTimers();
+    const registry = createGatewayHealthRegistry({
+      checkDatabase: () => new Promise<number>(() => {}),
+      checkRedis: async () => ({ status: "ok", pingMs: 1 }),
+      fetchImpl: healthyFetch(),
+    });
+
+    const pending = buildGatewayHealthReport(registry);
+    await vi.advanceTimersByTimeAsync(2100);
+    const report = await pending;
+
+    expect(report.checks.postgresql.status).toBe(false);
+    expect(report.status).toBe("unhealthy");
+  });
+});
+
+describe("toHealthCheckReport", () => {
+  it("maps ServiceHealth checks to booleans with the measured latency", () => {
+    const health: ServiceHealth = {
+      service: "gateway",
+      version: "0.0.1",
+      status: "degraded",
+      uptimeSeconds: 5,
+      checks: [
+        { name: "postgresql", status: "healthy", latencyMs: 4, checkedAt: new Date().toISOString() },
+        { name: "horizon", status: "degraded", latencyMs: 12, checkedAt: new Date().toISOString() },
+        { name: "sorobanRpc", status: "unhealthy", latencyMs: 2000, checkedAt: new Date().toISOString() },
+      ],
+    };
+
+    expect(toHealthCheckReport(health)).toEqual({
+      status: "degraded",
+      checks: {
+        postgresql: { status: true, latencyMs: 4 },
+        horizon: { status: false, latencyMs: 12 },
+        sorobanRpc: { status: false, latencyMs: 2000 },
+      },
+    });
   });
 });

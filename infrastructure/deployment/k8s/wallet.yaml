@@ -37,6 +37,16 @@ spec:
                 secretKeyRef:
                   name: delego-db
                   key: database-url
+            - name: PAYMENTS_WALLET_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: delego-service-auth
+                  key: payments-wallet-service-token
+            - name: ESCROW_CONTRACT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: delego-stellar
+                  key: escrow-contract-id
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:

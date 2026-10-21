@@ -44,3 +44,19 @@ export interface PermissionGrant {
   limit: bigint;
   expiresAt: string | null;
 }
+
+/** Faucet dispenser request (Issue #373) */
+export interface FaucetRequest {
+  destinationAddress: string;
+  tokenCode?: string;
+  clientToken: string;
+}
+
+export interface FaucetResponse {
+  success: boolean;
+  destinationAddress: string;
+  tokenCode: string;
+  amountFunded: string;
+  txHash: string;
+  message?: string;
+}

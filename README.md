@@ -42,6 +42,7 @@ Delego (web) ──> API Gateway ──> Orchestrator / Wallet / Payments / Noti
 | Payments | `@delegolabs/payments` | 3014 | Escrow coordination, settlements, refunds |
 | Notifications | `@delegolabs/notifications` | 3015 | Email/push notifications with retry (DLQ) |
 | Cert Manager | `@delegolabs/certmanager` | 3020 | Automated TLS certificates: ACME issuance, renewal, CT logs, inventory, revocation, deployment |
+| DB Vacuum | `@delegolabs/db-vacuum` | 3022 | PostgreSQL bloat monitoring: dead-tuple thresholds, alerts, non-blocking `VACUUM ANALYZE`, worker metrics |
 
 Each service is independently deployable and exposes `GET /health`.
 

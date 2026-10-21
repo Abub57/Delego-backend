@@ -1,5 +1,31 @@
-export { createLogger, type Logger } from "./logger.js";
+export {
+  createLogger,
+  getLogContext,
+  runWithLogContext,
+  type Logger,
+  type LogContext,
+} from "./logger.js";
+export {
+  PII_PATTERNS,
+  PII_REDACTION_PLACEHOLDER,
+  maskPii,
+  maskPiiDeep,
+  containsPii,
+} from "./piiMasking.js";
+export {
+  DEFAULT_WEBSOCKET_MONITOR_CONFIG,
+  enableSocketKeepAlive,
+  WebSocketStallMonitor,
+  computeReconnectBackoffMs,
+  resolveReplayStartLedger,
+  type WebSocketMonitorConfig,
+  type KeepAliveSocket,
+  type PingPongSocket,
+  type WebSocketStallMonitorHooks,
+} from "./websocketMonitor.js";
+export { CORRELATION_ID_HEADER, correlationMiddleware, fetchWithCorrelation } from "./correlation.js";
 export { stroopsToDisplay, displayToStroops } from "./currency.js";
+export { addDecimalStrings, sumDecimalStrings } from "./decimalMath.js";
 export {
   generateId,
   isValidStellarPublicKey,
@@ -119,6 +145,7 @@ export {
   RedisStreamManager,
   createStreamManager,
 } from "./redis/index.js";
+export { safeParseStreamPayload } from "./redis/streams.js";
 export type {
   StreamConfig,
   StreamEvent,
@@ -126,6 +153,8 @@ export type {
   StreamProcessingResult,
   StreamMessage,
   ParsedStreamMessage,
+  StreamMessageEnvelope,
+  ParseResult,
 } from "./redis/streams.js";
 
 export * from "./database/queryPerformance.js";
@@ -185,6 +214,7 @@ export {
   type ValidationErrorList,
 } from "./securityEventDetection.js";
 export { requireAuth } from "./auth.js";
+export { requireServiceAuth, SERVICE_AUTH_HEADER, type ServiceAuthOptions } from "./serviceAuth.js";
 export {
   generateApiKey,
   verifyApiKey,
@@ -234,6 +264,33 @@ export {
   type LogMetrics,
   type RetentionValidationResult,
 } from "./logAggregation.js";
+export {
+  compressLogChunk,
+  decompressLogChunk,
+  verifyLogChunkCompression,
+  buildLogChunkArchival,
+  isZstdCompressionSupported,
+  LogChunkCompressionError,
+  UnsupportedLogChunkCompressionError,
+  DEFAULT_LOG_CHUNK_COMPRESSION_ALGORITHM,
+  type LogChunkCompressionAlgorithm,
+  type LogChunkCompressionOptions,
+  type CompressedLogChunk,
+  type LogChunkArchival,
+  type LogChunkArchivalContext,
+  type LogChunkCompressionVerification,
+} from "./logChunkCompression.js";
+export {
+  runLogChunkBenchmark,
+  printLogChunkBenchmark,
+  type LogChunkBenchmarkOptions,
+  type LogChunkBenchmarkEntry,
+  type LogChunkBenchmarkResult,
+} from "./logChunkCompressionBenchmark.js";
 export * from "./softDelete/index.js";
 export * from "./audit/index.js";
 export * from "./encryption/index.js";
+export * from "./carrier/index.js";
+export * from "./containerDigest.js";
+export * from "./telemetry/index.js";
+export * from "./magicBytes.js";

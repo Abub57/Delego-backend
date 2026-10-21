@@ -300,8 +300,16 @@ async function updateSettlement(
   amount: string,
   paymentId: string
 ): Promise<void> {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Bucket settlements by the UTC calendar day, not the server's local
+  // timezone (Issue #339). `setHours(0, 0, 0, 0)` truncates to local
+  // midnight, which on any non-UTC server shifts the window boundary away
+  // from the UTC day — an order placed at, say, 23:30 UTC could land in
+  // "today's" local bucket while one at 00:30 UTC lands in "tomorrow's",
+  // splitting a single UTC day's orders across two settlement records.
+  // `Date.UTC` with the UTC getters below builds the boundary from the
+  // instant's UTC calendar fields regardless of server timezone.
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
   const settlement = await CurrencySettlement.findOne({
     where: {

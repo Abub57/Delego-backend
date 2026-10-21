@@ -135,3 +135,105 @@ export async function circuitBreakerStatusHandler(
 
   json(res, 200, { data: getAllCircuitBreakerStats(), error: null });
 }
+
+/**
+ * POST /api/v1/admin/emergency/broadcast (Issue #375)
+ * Broadcasts an emergency signal (kill_session, pause_all_traffic, resume) across all gateway instances.
+ */
+export async function emergencyBroadcastHandler(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const auth = extractAuth(req);
+  if (!auth.userId) {
+    unauthorized(res, "Authentication required", req);
+    return;
+  }
+
+  if (!isAdmin(req)) {
+    forbidden(res, "Admin role required", req);
+    return;
+  }
+
+  try {
+    const body = await new Promise<any>((resolve, reject) => {
+      let data = "";
+      req.on("data", (chunk) => (data += chunk));
+      req.on("end", () => {
+        try {
+          resolve(data ? JSON.parse(data) : {});
+        } catch (e) {
+          reject(new Error("Invalid JSON body"));
+        }
+      });
+      req.on("error", reject);
+    });
+
+    const { action, targetId } = body;
+    if (!action || !["kill_session", "pause_all_traffic", "resume"].includes(action)) {
+      sendApiError(res, 400, "VALIDATION_ERROR", "action must be one of: kill_session, pause_all_traffic, resume", req);
+      return;
+    }
+
+    if (action === "kill_session" && !targetId) {
+      sendApiError(res, 400, "VALIDATION_ERROR", "targetId (session/token ID) is required for kill_session", req);
+      return;
+    }
+
+    const { getEmergencyKillSwitchService } = await import("../src/emergency/killSwitch.js");
+    const killSwitch = getEmergencyKillSwitchService();
+    const signal = {
+      action,
+      targetId,
+      signedByAdmin: auth.userId,
+      timestamp: Date.now(),
+    };
+
+    await killSwitch.broadcast(signal);
+
+    json(res, 200, {
+      data: {
+        success: true,
+        signal,
+        state: killSwitch.getState(),
+      },
+      error: null,
+    });
+  } catch (err: any) {
+    sendApiError(res, 500, "INTERNAL_ERROR", err.message, req);
+  }
+}
+
+/**
+ * GET /api/v1/admin/emergency/status (Issue #375)
+ * Returns current status of emergency kill-switch.
+ */
+export async function emergencyStatusHandler(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const auth = extractAuth(req);
+  if (!auth.userId) {
+    unauthorized(res, "Authentication required", req);
+    return;
+  }
+
+  if (!isAdmin(req)) {
+    forbidden(res, "Admin role required", req);
+    return;
+  }
+
+  const { getEmergencyKillSwitchService } = await import("../src/emergency/killSwitch.js");
+  const killSwitch = getEmergencyKillSwitchService();
+  const state = killSwitch.getState();
+
+  json(res, 200, {
+    data: {
+      trafficPaused: state.trafficPaused,
+      pausedAt: state.pausedAt,
+      pausedBy: state.pausedBy,
+      killedSessionsCount: state.killedSessions.size,
+    },
+    error: null,
+  });
+}

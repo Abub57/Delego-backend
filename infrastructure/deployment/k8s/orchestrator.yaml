@@ -40,6 +40,11 @@ spec:
                 secretKeyRef:
                   name: delego-redis
                   key: url
+            - name: ORCHESTRATOR_PAYMENTS_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: delego-service-auth
+                  key: orchestrator-payments-service-token
             - name: ORCHESTRATOR_INSTANCE_ID
               valueFrom:
                 fieldRef:

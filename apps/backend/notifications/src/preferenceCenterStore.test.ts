@@ -191,3 +191,41 @@ describe("migration records", () => {
     expect(params).toEqual(["user-1"]);
   });
 });
+
+// ---- #300: documents saved before the whatsapp channel existed ---------------
+
+/** A stored document as it looked before `whatsapp` was added. */
+function legacyDocWithoutWhatsapp(userId: string): NotificationPreference {
+  const doc = getDefaultNotificationPreference(userId) as unknown as {
+    channels: Record<string, unknown>;
+    categories: Record<string, { channels: string[] }>;
+  };
+  delete doc.channels.whatsapp;
+  for (const category of Object.values(doc.categories)) {
+    category.channels = category.channels.filter((c) => c !== "whatsapp");
+  }
+  return doc as unknown as NotificationPreference;
+}
+
+describe("legacy documents without a whatsapp channel", () => {
+  it("upgrade user documents on read so WhatsApp follows SMS", async () => {
+    const legacy = legacyDocWithoutWhatsapp("user-1");
+    legacy.channels.sms.enabled = false;
+    const db = makeDb([[fullRow({ preferences: legacy, version: 2 })]]);
+
+    const stored = await getStoredPreference(db, "user-1");
+
+    expect(stored?.preferences.channels.whatsapp.enabled).toBe(false);
+    expect(stored?.preferences.categories.transaction.channels).toContain("whatsapp");
+  });
+
+  it("upgrade org defaults on read", async () => {
+    const legacy = legacyDocWithoutWhatsapp("org-1");
+    const db = makeDb([[{ org_id: "org-1", preferences: legacy, version: 2, updated_at: new Date() }]]);
+
+    const prefs = await getOrgDefaultPreference(db, "org-1");
+
+    expect(prefs?.channels.whatsapp.enabled).toBe(true);
+    expect(prefs?.categories.transaction.channels).toContain("whatsapp");
+  });
+});

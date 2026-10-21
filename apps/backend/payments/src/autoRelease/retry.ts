@@ -19,6 +19,13 @@ export interface RetryOptions {
   onRetry?: (attempt: number, error: unknown, delayMs: number) => void;
   /** Injectable sleep function — tests can pass a no-op to skip real timers. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Predicate deciding whether a thrown error is retryable. When omitted every
+   * error is retried (the original, backwards-compatible behaviour). Return
+   * `false` to fail fast on deterministic errors such as contract logic
+   * rejections — see `isTransientNetworkError` in the escrow coordinator.
+   */
+  shouldRetry?: (error: unknown, attempt: number) => boolean;
 }
 
 export interface RetryResult<T> {
@@ -46,6 +53,7 @@ export async function retryWithBackoff<T>(
   const sleep = options.sleep ?? defaultSleep;
 
   let lastError: unknown;
+  let retryCount = 0;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -54,10 +62,12 @@ export async function retryWithBackoff<T>(
     } catch (err) {
       lastError = err;
       const isLastAttempt = attempt === maxRetries;
-      if (isLastAttempt) {
+      const isRetryable = options.shouldRetry ? options.shouldRetry(err, attempt) : true;
+      if (isLastAttempt || !isRetryable) {
         break;
       }
 
+      retryCount = attempt + 1;
       const delayMs = baseDelayMs * 2 ** attempt;
       log.warn("Retryable operation failed, backing off before retry", {
         attempt: attempt + 1,
@@ -70,5 +80,5 @@ export async function retryWithBackoff<T>(
     }
   }
 
-  return { success: false, error: lastError, retryCount: maxRetries };
+  return { success: false, error: lastError, retryCount };
 }

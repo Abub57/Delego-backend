@@ -24,5 +24,14 @@
   "permission_expiry_updated_body": "The expiry date for the spending permission granted to {{delegate}} by {{owner}} has been updated. New expiry: {{newExpiry}}.",
 
   "transaction_approval_subject": "Approval required for order {{orderId}}",
-  "transaction_approval_body": "Your AI agent is requesting approval to complete order {{orderId}} for {{amount}} from {{merchant}}. Please review and approve at: {{approvalUrl}}"
+  "transaction_approval_body": "Your AI agent is requesting approval to complete order {{orderId}} for {{amount}} from {{merchant}}. Please review and approve at: {{approvalUrl}}",
+
+  "sms_out_for_delivery_subject": "Order {{orderId}} is out for delivery",
+  "sms_out_for_delivery_body": "Delego: your order {{orderId}} is out for delivery today. Tracking: {{trackingNumber}}.",
+
+  "sms_auto_release_warning_subject": "Escrow for order {{orderId}} will be released soon",
+  "sms_auto_release_warning_body": "Delego: escrow for order {{orderId}} (tracking {{trackingNumber}}) will be released to the merchant soon. If there is a problem with your delivery, open a dispute before then.",
+
+  "sms_refund_processed_subject": "Refund processed for order {{orderId}}",
+  "sms_refund_processed_body": "Delego: the refund for order {{orderId}} (tracking {{trackingNumber}}) has been processed."
 }

@@ -22,7 +22,8 @@ export function applyCors(req: IncomingMessage, res: ServerResponse): void {
     logRejectedOrigin(req, requestOrigin);
   }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Correlation-ID");
+  res.setHeader("Access-Control-Expose-Headers", "X-Correlation-ID");
 }
 
 function logRejectedOrigin(req: IncomingMessage, origin: string): void {

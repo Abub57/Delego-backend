@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  upgradeLegacyWhatsappPreference,
   NOTIFICATION_CHANNELS,
   NOTIFICATION_CATEGORIES,
   getDefaultNotificationPreference,
@@ -365,5 +366,71 @@ describe("validatePreferenceUpdate", () => {
     });
     expect(errors.some((e) => e.includes("Invalid quiet hours start"))).toBe(true);
     expect(errors.some((e) => e.includes("Invalid quiet hours timezone"))).toBe(true);
+  });
+});
+
+describe("upgradeLegacyWhatsappPreference (#300)", () => {
+  function legacy(mutate: (doc: NotificationPreference) => void = () => {}): NotificationPreference {
+    const doc = getDefaultNotificationPreference("user-1");
+    mutate(doc);
+    const raw = doc as unknown as {
+      channels: Record<string, unknown>;
+      categories: Record<string, { channels: string[] }>;
+    };
+    delete raw.channels.whatsapp;
+    for (const category of Object.values(raw.categories)) {
+      category.channels = category.channels.filter((c) => c !== "whatsapp");
+    }
+    return doc;
+  }
+
+  it("copies the SMS channel setting to WhatsApp", () => {
+    const upgraded = upgradeLegacyWhatsappPreference(
+      legacy((doc) => {
+        doc.channels.sms.enabled = false;
+        doc.channels.sms.types["out_for_delivery"] = false;
+      })
+    );
+    expect(upgraded.channels.whatsapp.enabled).toBe(false);
+    expect(upgraded.channels.whatsapp.types["out_for_delivery"]).toBe(false);
+  });
+
+  it("adds whatsapp to categories that allow sms, and only those", () => {
+    const upgraded = upgradeLegacyWhatsappPreference(
+      legacy((doc) => {
+        doc.categories.marketing.channels = ["email"];
+      })
+    );
+    expect(upgraded.categories.transaction.channels).toContain("whatsapp");
+    expect(upgraded.categories.marketing.channels).toEqual(["email"]);
+  });
+
+  it("does not let a legacy user receive WhatsApp where SMS was blocked", () => {
+    const upgraded = upgradeLegacyWhatsappPreference(
+      legacy((doc) => {
+        doc.categories.transaction.channels = ["email", "push"];
+      })
+    );
+    expect(shouldSendOnChannel(upgraded, "whatsapp", "transaction")).toBe(false);
+    expect(shouldSendOnChannel(upgraded, "sms", "transaction")).toBe(false);
+  });
+
+  it("allows WhatsApp for a legacy user who allows SMS", () => {
+    const upgraded = upgradeLegacyWhatsappPreference(legacy());
+    expect(shouldSendOnChannel(upgraded, "whatsapp", "transaction")).toBe(true);
+  });
+
+  it("leaves documents that already have a whatsapp entry unchanged", () => {
+    const current = getDefaultNotificationPreference("user-1");
+    current.channels.whatsapp.enabled = false;
+    current.channels.sms.enabled = true;
+    expect(upgradeLegacyWhatsappPreference(current)).toBe(current);
+  });
+
+  it("does not mutate its input", () => {
+    const doc = legacy();
+    const before = JSON.stringify(doc);
+    upgradeLegacyWhatsappPreference(doc);
+    expect(JSON.stringify(doc)).toBe(before);
   });
 });

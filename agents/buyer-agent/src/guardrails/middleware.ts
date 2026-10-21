@@ -4,19 +4,39 @@
  * Two responsibilities:
  *  1. sanitizeText()  — strips prompt-injection attempts from untrusted
  *                       merchant/product descriptions before they reach the LLM.
- *  2. validateToolParams() — validates all tool call parameters against Zod
- *                            schemas before execution; rejects any call that
- *                            doesn't conform.
+ *  2. validateToolParams() — sanitizes, type-coerces and validates all tool
+ *                            call parameters against Zod schemas before
+ *                            execution; rejects any call that doesn't conform.
+ *
+ * Issue #362: argument sanitization and explicit type coercion now run ahead of
+ * validation, so an LLM that sends `"10.5"` (dollars) for an integer stroop
+ * field is corrected rather than crashing the invoker, and rejections carry a
+ * self-correction prompt the agent loop can hand back to the model.
  *
  * Security incidents are written to the `security_alerts` table so the ops
  * team can audit them after the fact.
+ *
+ * Issue #349: `buildSanitizedPromptInput()` separates trusted system
+ * instructions from untrusted user/catalog data using explicit delimiter
+ * tags before either is handed to the LLM, and `enforceToolCallPolicy()`
+ * applies a `ToolCallGuardrailPolicy` (allowed tool allow-list, per-call
+ * spending cap, mandatory human approval) on top of per-tool schema
+ * validation so a call cannot spend funds purely because it is well-formed.
  */
+import { createHash } from "node:crypto";
 import { createLogger } from "@delegolabs/utils";
 import type { Pool } from "pg";
 import {
+  buildSelfCorrectionPrompt,
+  sanitizeToolCall,
+} from "../../../src/tools/sanitization.js";
+import {
+  DEFAULT_GUARDRAIL_POLICY,
   TOOL_SCHEMAS,
   type FlaggedCategory,
   type GuardrailCheckResult,
+  type SanitizedPromptInput,
+  type ToolCallGuardrailPolicy,
   type ToolName,
 } from "./types.js";
 
@@ -126,11 +146,13 @@ export class GuardrailMiddleware {
   }
 
   /**
-   * Validate tool call parameters against the registered Zod schema for
-   * `toolName`.  Returns the parsed (safe, coerced) params on success.
+   * Sanitize, type-coerce and validate tool call parameters against the
+   * registered Zod schema for `toolName`. Returns the parsed (safe, coerced)
+   * params on success.
    *
    * Throws a `GuardrailValidationError` on failure so callers can handle
-   * tool-call rejections without a full process crash.
+   * tool-call rejections without a full process crash. The error carries a
+   * self-correction prompt so the model can retry with valid arguments (#362).
    */
   validateToolParams<T = unknown>(
     toolName: string,
@@ -144,21 +166,136 @@ export class GuardrailMiddleware {
       );
     }
 
-    const result = schema.safeParse(rawParams);
-    if (!result.success) {
-      const message = result.error.issues
-        .map((i) => `${i.path.join(".")}: ${i.message}`)
-        .join("; ");
+    const result = sanitizeToolCall(toolName, rawParams, schema);
+
+    if (!result.executionAllowed) {
+      const issues = result.sanitizationErrors ?? ["unknown validation failure"];
 
       log.warn("Guardrail: tool parameter validation failed", {
         toolName,
-        issues: result.error.issues,
+        issues,
       });
 
-      throw new GuardrailValidationError(toolName, message);
+      throw new GuardrailValidationError(toolName, issues.join("; "), {
+        selfCorrectionPrompt: buildSelfCorrectionPrompt(toolName, issues),
+      });
     }
 
-    return result.data as T;
+    return result.validatedArguments as T;
+  }
+
+  /**
+   * Build the delimiter-tagged, injection-scanned payload that is handed to
+   * the LLM in place of the raw user instruction and raw catalog text.
+   *
+   * `userInstruction` and `catalogContext` are untrusted — they may contain
+   * merchant-authored or user-authored text carrying injected instructions —
+   * so both are wrapped in explicit `<user_data>` / `<catalog_data>` tags and
+   * scanned for known injection patterns before being combined with the
+   * (trusted, fixed) `systemPrompt`. `systemPolicyHash` binds the request to
+   * that exact system prompt so a downstream tampering/truncation can be
+   * detected by comparing hashes.
+   */
+  async buildSanitizedPromptInput(params: {
+    userInstruction: string;
+    catalogContext: string;
+    systemPrompt: string;
+    context?: { userId?: string; source?: string };
+  }): Promise<SanitizedPromptInput> {
+    const [userCheck, catalogCheck] = await Promise.all([
+      this.sanitizeText(params.userInstruction, {
+        ...params.context,
+        source: params.context?.source ?? "user_instruction",
+      }),
+      this.sanitizeText(params.catalogContext, {
+        ...params.context,
+        source: "catalog_context",
+      }),
+    ]);
+
+    const userInstruction = `<user_data>\n${userCheck.sanitizedText}\n</user_data>`;
+    const catalogContext = `<catalog_data>\n${catalogCheck.sanitizedText}\n</catalog_data>`;
+    const systemPolicyHash = createHash("sha256")
+      .update(params.systemPrompt)
+      .digest("hex");
+
+    return {
+      userInstruction,
+      catalogContext,
+      systemPolicyHash,
+      isFlaggedForInjection: !userCheck.isSafe || !catalogCheck.isSafe,
+    };
+  }
+
+  /**
+   * Validate `rawParams` against the tool's Zod schema *and* the guardrail
+   * policy in effect for this run. Execution is blocked — with no partial
+   * side effects — if the tool is not in `policy.allowedToolNames`, if an
+   * `initiate_checkout` call requests more than
+   * `policy.maxSpendingAmountPerCall` stroops, or if the policy requires
+   * human approval for spending calls.
+   *
+   * This is the entry point agent runtimes should call before invoking any
+   * tool; `validateToolParams` alone only guarantees schema conformance, not
+   * that the call is authorized to spend.
+   */
+  validateToolCall<T = unknown>(
+    toolName: string,
+    rawParams: unknown,
+    policy: ToolCallGuardrailPolicy = DEFAULT_GUARDRAIL_POLICY
+  ): T {
+    if (!policy.allowedToolNames.includes(toolName)) {
+      log.warn("Guardrail: tool call rejected by allow-list", { toolName });
+      throw new GuardrailValidationError(
+        toolName,
+        `Tool "${toolName}" is not permitted by the current guardrail policy. ` +
+          `Allowed tools: ${policy.allowedToolNames.join(", ") || "(none)"}.`
+      );
+    }
+
+    const validated = this.validateToolParams<T>(toolName, rawParams);
+
+    if (toolName === "initiate_checkout") {
+      const params = validated as unknown as { totalAmountStroops: string };
+      let amount: bigint;
+      try {
+        amount = BigInt(params.totalAmountStroops);
+      } catch {
+        throw new GuardrailValidationError(
+          toolName,
+          `totalAmountStroops "${params.totalAmountStroops}" is not a valid integer.`
+        );
+      }
+
+      if (amount > policy.maxSpendingAmountPerCall) {
+        log.warn("Guardrail: spending cap exceeded", {
+          toolName,
+          amount: amount.toString(),
+          maxSpendingAmountPerCall: policy.maxSpendingAmountPerCall.toString(),
+        });
+        throw new GuardrailValidationError(
+          toolName,
+          `Requested amount ${amount.toString()} stroops exceeds the per-call ` +
+            `limit of ${policy.maxSpendingAmountPerCall.toString()} stroops. ` +
+            `Request human approval or split the purchase.`
+        );
+      }
+
+      if (policy.requireHumanApproval) {
+        throw new GuardrailValidationError(
+          toolName,
+          "This policy requires human approval before any spending tool call " +
+            "may execute. Route this call through the approval workflow " +
+            "instead of invoking it directly.",
+          { selfCorrectionPrompt: buildSelfCorrectionPrompt(toolName, [
+            "Spending requires human approval under the active policy; " +
+              "do not retry this call — request approval instead.",
+          ]) }
+        );
+      }
+    }
+
+    return validated;
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────
@@ -199,11 +336,17 @@ export class GuardrailMiddleware {
 }
 
 export class GuardrailValidationError extends Error {
+  /** Structured feedback to send back to the model so it can self-correct (#362). */
+  readonly selfCorrectionPrompt: string;
+
   constructor(
     public readonly toolName: string,
-    message: string
+    message: string,
+    options: { selfCorrectionPrompt?: string } = {}
   ) {
     super(`Tool parameter validation failed for "${toolName}": ${message}`);
     this.name = "GuardrailValidationError";
+    this.selfCorrectionPrompt =
+      options.selfCorrectionPrompt ?? buildSelfCorrectionPrompt(toolName, [message]);
   }
 }

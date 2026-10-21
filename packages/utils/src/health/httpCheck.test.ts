@@ -40,4 +40,52 @@ describe("httpHealthCheck", () => {
     const result = await check();
     expect(result?.status).toBe("degraded");
   });
+
+  it("forwards a POST body and evaluates a JSON-RPC bodyStatus", async () => {
+    let seenMethod: string | undefined;
+    let seenBody: string | undefined;
+    let seenContentType: string | undefined;
+
+    const check = httpHealthCheck({
+      url: "http://rpc.test/",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        seenMethod = init?.method;
+        seenBody = init?.body as string;
+        seenContentType = (init?.headers as Record<string, string>)["Content-Type"];
+        return new Response(JSON.stringify({ result: { status: "healthy" } }), { status: 200 });
+      }) as typeof fetch,
+      bodyStatus: (body) =>
+        (body as { result?: { status?: string } })?.result?.status === "healthy"
+          ? "healthy"
+          : "degraded",
+    });
+
+    const result = await check();
+
+    expect(seenMethod).toBe("POST");
+    expect(seenContentType).toBe("application/json");
+    expect(JSON.parse(seenBody ?? "{}")).toMatchObject({ method: "getHealth" });
+    expect(result?.status).toBe("healthy");
+  });
+
+  it("reports degraded when a JSON-RPC body reports an error result", async () => {
+    const check = httpHealthCheck({
+      url: "http://rpc.test/",
+      method: "POST",
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ error: { code: -32603, message: "unavailable" } }), {
+          status: 200,
+        }),
+      bodyStatus: (body) =>
+        (body as { result?: { status?: string } })?.result?.status === "healthy"
+          ? "healthy"
+          : "degraded",
+    });
+    const result = await check();
+    expect(result?.status).toBe("degraded");
+  });
 });

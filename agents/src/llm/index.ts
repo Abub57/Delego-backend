@@ -16,11 +16,19 @@ export type {
   LLMMessage,
   LLMProviderName,
   LLMProvider,
+  LlmProvider,
   ChatMessage,
   TokenUsage,
+  LLMProviderMetrics,
+  LlmRequestOptions,
 } from "./types.js";
 
 export { OpenAIClient } from "./openai.js";
 export { AnthropicClient } from "./anthropic.js";
 export { GeminiClient } from "./gemini.js";
-export { createLLMClient, createDefaultLLMClient } from "./factory.js";
+export {
+  createLLMClient,
+  createDefaultLLMClient,
+  createFailoverLLMClient,
+  resolveFallbackChain,
+} from "./factory.js";

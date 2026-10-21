@@ -6,8 +6,9 @@
  * fast instead of piling up timed-out requests at the gateway.
  */
 
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, tracedFetch } from "@delegolabs/utils";
 import { CircuitBreakerOpenError, getCircuitBreaker, type DownstreamService } from "./circuitBreaker.js";
+import { fetchWithCorrelation } from "../middleware/correlation.js";
 
 const log = createLogger("gateway:service-client", process.env.LOG_LEVEL ?? "info");
 
@@ -59,12 +60,12 @@ export async function callDownstreamService<T = unknown>(
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const res = await fetch(url, {
+        const res = await fetchWithCorrelation(url, {
           method,
           headers: { "Content-Type": "application/json", ...headers },
           body: body !== undefined ? JSON.stringify(body) : undefined,
           signal: controller.signal,
-        });
+        }, tracedFetch as typeof fetch);
         if (!res.ok) {
           throw new Error(`${service} responded with status ${res.status}`);
         }

@@ -3,7 +3,7 @@ import type {
   TransactionRequest,
   TransactionResult,
 } from "@delegolabs/types";
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, SERVICE_AUTH_HEADER, tracedFetch } from "@delegolabs/utils";
 import { getWalletUrl } from "./config.js";
 import { estimateTransactionFee, type FeeEstimate } from "./feeEstimator.js";
 import { normalizeContractError } from "./errors.js";
@@ -46,6 +46,12 @@ export async function getTransactionFeeEstimate(): Promise<FeeEstimate> {
 export async function submitContractCall(
   request: TransactionRequest,
 ): Promise<TransactionResult> {
+  const serviceToken = process.env.PAYMENTS_WALLET_SERVICE_TOKEN;
+  if (!serviceToken?.trim()) {
+    throw normalizeContractError(new Error("PAYMENTS_WALLET_SERVICE_TOKEN is not configured"));
+  }
+  const userId = request.userId;
+
   const walletUrl = getWalletUrl();
   const url = `${walletUrl}/transactions/submit`;
 
@@ -62,9 +68,13 @@ export async function submitContractCall(
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await tracedFetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        [SERVICE_AUTH_HEADER]: serviceToken,
+        ...(userId?.trim() ? { "x-delego-user-id": userId } : {}),
+      },
       body: JSON.stringify({
         sourceAddress: request.sourceAddress,
         contractId: request.contractId,

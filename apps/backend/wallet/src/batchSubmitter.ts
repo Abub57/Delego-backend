@@ -1,7 +1,7 @@
 import { Operation, TransactionBuilder, Keypair, Networks, Address, nativeToScVal } from "@stellar/stellar-sdk";
 import type { TransactionRequest, TransactionResult } from "@delegolabs/types";
 import { vaultService } from "./vault.js";
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, withSpan } from "@delegolabs/utils";
 
 const log = createLogger("wallet:batchSubmitter", process.env.LOG_LEVEL ?? "info");
 
@@ -137,7 +137,7 @@ export async function submitTransactionBatch(
   const rpcUrl = process.env.STELLAR_RPC_URL ?? "https://soroban-testnet.stellar.org";
   const rpcServer = new rpc.Server(rpcUrl);
 
-  const sendRes = await rpcServer.sendTransaction(tx);
+  const sendRes = await withSpan("stellar.sendTransaction", () => rpcServer.sendTransaction(tx), { "peer.service": "stellar-rpc" });
   if (sendRes.status === "ERROR") {
     throw new Error(`Batch submission failed: ${JSON.stringify(sendRes)}`);
   }

@@ -19,19 +19,13 @@ import type {
   PasskeyAccountMapping,
   ChallengeResult,
   VerificationResult,
-} from './types';
+} from './types.js';
 
 /** Redis key prefix for WebAuthn challenges */
 const CHALLENGE_PREFIX = 'webauthn_challenge:';
 
 /** Challenge TTL: 5 minutes */
 const CHALLENGE_TTL_SECONDS = 300;
-
-/** Expected origin for WebAuthn verification (RP origin) */
-const RP_ORIGIN = process.env.WEBAUTHN_RP_ORIGIN ?? 'https://delego.app';
-
-/** RP ID for WebAuthn (domain name) */
-const RP_ID = process.env.WEBAUTHN_RP_ID ?? 'delego.app';
 
 export class PasskeyVerifier {
   constructor(
@@ -75,10 +69,10 @@ export class PasskeyVerifier {
    * @throws Error if challenge is invalid, expired, or already consumed
    */
   async verifySignature(
-    payload: WebAuthnVerificationPayload,
+    _payload: WebAuthnVerificationPayload,
   ): Promise<VerificationResult> {
     // 1. Consume challenge (single-use to prevent replay attacks)
-    const challengeKey = `${CHALLENGE_PREFIX}${payload.challenge}`;
+    const challengeKey = `${CHALLENGE_PREFIX}${_payload.challenge}`;
     const storedChallenge = await this.redis.get(challengeKey);
 
     if (!storedChallenge) {
@@ -121,7 +115,7 @@ export class PasskeyVerifier {
     //       signature: payload.signature,
     //     },
     //   },
-    //   expectedChallenge: payload.challenge,
+    //   expectedChallenge: _payload.challenge,
     //   expectedOrigin: RP_ORIGIN,
     //   expectedRPID: RP_ID,
     //   credential: {
@@ -131,14 +125,14 @@ export class PasskeyVerifier {
     //   },
     // });
 
-    const isSignatureValid = await this.verifyWebAuthnAssertion(payload);
+    const isSignatureValid = await this.verifyWebAuthnAssertion(_payload);
 
     if (!isSignatureValid) {
       return { verified: false, error: 'WebAuthn signature verification failed' };
     }
 
     // 3. Look up passkey-to-Stellar-account mapping
-    const mapping = await this.getPasskeyMapping(payload.credentialId);
+    const mapping = await this.getPasskeyMapping(_payload.credentialId);
 
     if (!mapping) {
       return {
@@ -257,7 +251,7 @@ export class PasskeyVerifier {
    * In production, use @simplewebauthn/server's verifyAuthenticationResponse.
    */
   private async verifyWebAuthnAssertion(
-    payload: WebAuthnVerificationPayload,
+    _payload: WebAuthnVerificationPayload,
   ): Promise<boolean> {
     // Production implementation:
     //

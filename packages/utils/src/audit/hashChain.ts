@@ -79,11 +79,19 @@ export function computeEntryHash(fields: HashableAuditFields, prevHash: string |
  * and the previous row's `entryHash` produces, and that each `prevHash`
  * actually points at the previous entry.
  *
- * The caller is responsible for fetching entries in `occurredAt`/`id`
- * order — this function trusts the order it's given.
+ * The caller is responsible for fetching entries in `sequence_num` order
+ * (oldest first) — this function trusts the order it's given.
+ *
+ * `startPrevHash` lets a caller verify the chain in pages: pass the tail
+ * `entryHash` of the previous page so this page's first entry is checked
+ * against it instead of against genesis. Defaults to null (a chain that
+ * starts at the beginning of the log).
  */
-export function verifyChain(entries: AuditLogEntry[]): ChainVerificationResult {
-  let expectedPrevHash: string | null = null;
+export function verifyChain(
+  entries: AuditLogEntry[],
+  startPrevHash: string | null = null
+): ChainVerificationResult {
+  let expectedPrevHash: string | null = startPrevHash;
   let entriesChecked = 0;
 
   for (const entry of entries) {

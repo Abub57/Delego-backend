@@ -7,6 +7,8 @@ import {
   json,
   route,
   startHttpServer,
+  tracedFetch,
+  initTelemetry,
   createHealthRoutes,
   corsMiddleware,
   securityHeadersMiddleware,
@@ -15,7 +17,7 @@ import {
 import { Pool } from "pg";
 import { Redis } from "ioredis";
 import { getCacheClient } from "@delegolabs/cache";
-import { createOrchestratorHealthRegistry } from "./health.js";
+import { createOrchestratorHealthRoutes } from "./health.js";
 import {
   createWorkflow,
   transitionWorkflow,
@@ -24,9 +26,11 @@ import {
 } from "../workflows/purchase/index.js";
 import {
   checkoutWorkflow,
+  createCheckoutWorkflowInput,
   createCheckoutSagaCoordinator,
   type CheckoutWorkflowInput,
 } from "../workflows/checkout/index.js";
+import { InsufficientStockError } from "./inventory/reservation.js";
 import { connectSagaDb, PostgresSagaStore, serializeSagaExecution } from "./saga/index.js";
 import { startOutboxRelay, type OutboxRelayHandle } from "./events/outboxRelay.js";
 import { PostgresServiceEventOutboxStore } from "./events/postgres-service-event-outbox.js";
@@ -41,6 +45,8 @@ import type { SagaCoordinator } from "./saga/index.js";
 import type { CheckoutContext } from "../workflows/checkout/index.js";
 import { PostgresTaskStore, tasksSequelize, TaskService, TaskEventBroker } from "./tasks/index.js";
 import { createTaskRoutes } from "./tasks/routes.js";
+import { DLQStore, DLQService, createDLQRoutes } from "./dlq/index.js";
+import type { ConnectionOptions } from "bullmq";
 
 const SERVICE_NAME = "orchestrator";
 const DEFAULT_PORT = 3010;
@@ -48,12 +54,16 @@ const MAX_REQUEST_BODY_BYTES = Number(process.env.MAX_REQUEST_BODY_BYTES ?? 1_04
 
 const logLevel = process.env.LOG_LEVEL ?? "info";
 const log = createLogger(SERVICE_NAME, logLevel);
+
+// Distributed tracing (Issue #307): enabled when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+void initTelemetry(SERVICE_NAME).catch((err: unknown) =>
+  log.warn("Telemetry init failed", { error: err instanceof Error ? err.message : String(err) })
+);
 const port = Number(process.env.ORCHESTRATOR_PORT ?? DEFAULT_PORT);
 
 const sagaStore = new PostgresSagaStore();
 let lockManager: DistributedLockManager | null = null;
 let checkoutSagaCoordinator: SagaCoordinator<CheckoutContext> = createCheckoutSagaCoordinator(sagaStore);
-const orchestratorHealthRegistry = createOrchestratorHealthRegistry();
 
 // ─── #33 Transactional Outbox Relay ──────────────────────────────────────────
 // Backs service_event_outbox writes (see workflows/purchase/index.ts transitionWorkflow)
@@ -71,6 +81,14 @@ let outboxRelay: OutboxRelayHandle | null = null;
 const taskStore = new PostgresTaskStore();
 let taskBroker: TaskEventBroker | null = null;
 const taskService = new TaskService({ store: taskStore });
+
+// ─── Dead Letter Queue (DLQ) Management ────────────────────────────────────
+// #310 Auto-replay & remediation worker for failed BullMQ jobs
+// Monitors failed jobs (e.g. temporary network partitions) and safely replays them
+// after circuit breaker resets to prevent retry storms.
+const dlqPool = new Pool({ connectionString: process.env.DATABASE_URL });
+const dlqStore = new DLQStore(dlqPool);
+let dlqService: DLQService | null = null;
 
 // ─── #64 Reconciliation Engine ───────────────────────────────────────────────
 
@@ -262,7 +280,7 @@ export async function recoverUnfinishedWorkflows(): Promise<WorkflowSnapshot[]> 
 async function fetchOnChainEscrowStatus(escrowId: string): Promise<"funded" | "released" | "refunded" | "not_found"> {
   const walletUrl = process.env.WALLET_SERVICE_URL ?? "http://localhost:3012";
   try {
-    const res = await fetch(`${walletUrl}/escrow/${encodeURIComponent(escrowId)}/status`);
+    const res = await tracedFetch(`${walletUrl}/escrow/${encodeURIComponent(escrowId)}/status`);
     if (!res.ok) return "not_found";
     const body = await res.json() as { data?: { status?: string } };
     const status = body.data?.status;
@@ -453,23 +471,41 @@ async function main(): Promise<void> {
     }
   }
 
+  // Initialize DLQ service with Redis connection for BullMQ
+  const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
+  const redisConnection: ConnectionOptions = {
+    host: new URL(redisUrl).hostname,
+    port: Number(new URL(redisUrl).port) || 6379,
+  };
+  dlqService = new DLQService(dlqStore, redisConnection, log);
+  log.info("DLQ service initialized");
+
   log.info("Starting orchestrator", { port });
   startHttpServer({
     port,
     serviceName: SERVICE_NAME,
     middleware: [corsMiddleware(), securityHeadersMiddleware(), requireAuth()],
     routes: [
-      ...createHealthRoutes({
-        registry: orchestratorHealthRegistry,
-        serviceName: SERVICE_NAME,
-        version: "0.0.1",
-        extraMetrics: () => lockManager?.metrics.toPrometheusText() ?? "",
-      }),
+      ...createOrchestratorHealthRoutes(
+        undefined,
+        () => lockManager?.metrics.toPrometheusText() ?? "",
+      ),
       ...(lockManager ? createLockRoutes(lockManager) : []),
 
       ...createTaskRoutes(taskService, taskStore),
 
+      ...(dlqService ? createDLQRoutes(dlqService) : []),
+
       route("POST", "/checkout", async (req, res) => {
+        const authenticatedUserId = (req as typeof req & { userId?: string }).userId;
+        if (!authenticatedUserId) {
+          json(res, 401, {
+            data: null,
+            error: { code: "UNAUTHORIZED", message: "Authentication required" },
+          });
+          return;
+        }
+
         let body: Record<string, unknown>;
         try {
           body = await readJsonBody(req);
@@ -484,7 +520,10 @@ async function main(): Promise<void> {
           return;
         }
 
-        const input = body as Partial<CheckoutWorkflowInput>;
+        const input = body as Partial<Pick<
+          CheckoutWorkflowInput,
+          "orderId" | "sourceAddress" | "buyerAddress" | "sellerAddress"
+        >>;
         if (
           typeof input.orderId !== "string" ||
           typeof input.sourceAddress !== "string" ||
@@ -503,7 +542,8 @@ async function main(): Promise<void> {
 
         try {
           const sagaId = `checkout:${input.orderId}`;
-          const result = await checkoutWorkflow(input as CheckoutWorkflowInput, checkoutSagaCoordinator, sagaId);
+          const workflowInput = createCheckoutWorkflowInput(input, authenticatedUserId);
+          const result = await checkoutWorkflow(workflowInput, checkoutSagaCoordinator, sagaId);
           json(res, result.status === "completed" || result.status === "compensated" ? 200 : 502, {
             data: serializeSagaExecution(result),
             error:
@@ -512,6 +552,13 @@ async function main(): Promise<void> {
                 : { code: "CHECKOUT_SAGA_FAILED", message: result.error ?? "Checkout saga failed" },
           });
         } catch (err) {
+          if (err instanceof InsufficientStockError) {
+            json(res, 409, {
+              data: null,
+              error: { code: "INSUFFICIENT_STOCK", message: err.message },
+            });
+            return;
+          }
           json(res, 502, {
             data: null,
             error: {
@@ -676,6 +723,26 @@ async function main(): Promise<void> {
       process.once(signal, () => clearInterval(slaTimer));
     }
   }
+
+  // ─── DLQ Auto-Replay Cron ──────────────────────────────────────────────
+  // Issue #310: Periodically auto-replays failed jobs with recoverable network errors
+  // Interval defaults to 5 minutes; set DLQ_AUTO_REPLAY_INTERVAL_MS=0 to disable
+  const dlqReplayIntervalMs = Number(process.env.DLQ_AUTO_REPLAY_INTERVAL_MS ?? 300_000);
+  if (dlqReplayIntervalMs > 0 && dlqService) {
+    await dlqService.autoReplayRecoverableJobs().catch((err) =>
+      log.warn("Initial DLQ auto-replay failed", { error: err instanceof Error ? err.message : String(err) })
+    );
+    const dlqTimer = setInterval(() => {
+      void dlqService?.autoReplayRecoverableJobs().catch((err) =>
+        log.warn("DLQ auto-replay failed", { error: err instanceof Error ? err.message : String(err) })
+      );
+    }, dlqReplayIntervalMs);
+    dlqTimer.unref();
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.once(signal, () => clearInterval(dlqTimer));
+    }
+    log.info("DLQ auto-replay cron started", { intervalMs: dlqReplayIntervalMs });
+  }
 }
 
 main().catch((err) => {
@@ -709,6 +776,14 @@ async function gracefulShutdown(signal: NodeJS.Signals): Promise<void> {
     }
   }
 
+  if (dlqService) {
+    try {
+      await dlqService.close();
+    } catch (err) {
+      log.error("Error closing DLQ service", { error: (err as Error).message });
+    }
+  }
+
   process.exit(0);
 }
 
@@ -728,4 +803,3 @@ export { publishWorkflowEvent, createWorkflowCorrelationId } from "./workflow-ev
 export type { WorkflowEventEnvelope } from "./workflow-events.js";
 export { PurchaseWorkflowMachine } from "../state/index.js";
 export type { PurchaseState, PurchaseEvent } from "../state/index.js";
-

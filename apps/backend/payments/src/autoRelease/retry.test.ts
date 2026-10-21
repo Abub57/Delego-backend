@@ -62,4 +62,30 @@ describe("retryWithBackoff", () => {
 
     expect(onRetry).toHaveBeenCalledWith(1, expect.any(Error), 2000);
   });
+
+  it("stops retrying when shouldRetry rejects the error", async () => {
+    const terminalError = new Error("Error(Contract, #35)");
+    const fn = vi.fn().mockRejectedValue(terminalError);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const result = await retryWithBackoff(fn, { sleep, shouldRetry: () => false });
+
+    expect(result).toEqual({ success: false, error: terminalError, retryCount: 0 });
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("continues retrying while shouldRetry accepts the error", async () => {
+    const transientError = new Error("fetch failed");
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(transientError)
+      .mockResolvedValueOnce("recovered");
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const result = await retryWithBackoff(fn, { sleep, shouldRetry: () => true });
+
+    expect(result).toEqual({ success: true, value: "recovered", retryCount: 1 });
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
 });

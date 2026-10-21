@@ -24,5 +24,14 @@
   "permission_expiry_updated_body": "La fecha de expiración del permiso de gasto concedido a {{delegate}} por {{owner}} ha sido actualizada. Nueva expiración: {{newExpiry}}.",
 
   "transaction_approval_subject": "Se requiere aprobación para el pedido {{orderId}}",
-  "transaction_approval_body": "Tu agente de IA solicita aprobación para completar el pedido {{orderId}} por {{amount}} de {{merchant}}. Por favor, revisa y aprueba en: {{approvalUrl}}"
+  "transaction_approval_body": "Tu agente de IA solicita aprobación para completar el pedido {{orderId}} por {{amount}} de {{merchant}}. Por favor, revisa y aprueba en: {{approvalUrl}}",
+
+  "sms_out_for_delivery_subject": "El pedido {{orderId}} está en camino",
+  "sms_out_for_delivery_body": "Delego: tu pedido {{orderId}} sale hoy para entrega. Seguimiento: {{trackingNumber}}.",
+
+  "sms_auto_release_warning_subject": "El depósito del pedido {{orderId}} se liberará pronto",
+  "sms_auto_release_warning_body": "Delego: el depósito en garantía del pedido {{orderId}} (seguimiento {{trackingNumber}}) se liberará pronto al comercio. Si hay un problema con tu entrega, abre una disputa antes.",
+
+  "sms_refund_processed_subject": "Reembolso procesado para el pedido {{orderId}}",
+  "sms_refund_processed_body": "Delego: el reembolso del pedido {{orderId}} (seguimiento {{trackingNumber}}) ha sido procesado."
 }

@@ -1,3 +1,5 @@
+import { fetchWithCorrelation } from "../../middleware/correlation.js";
+
 import { User } from "../models/User.js";
 import { OAuthAccount } from "../models/OAuthAccount.js";
 import { generateTokens } from "./authService.js";
@@ -103,7 +105,7 @@ export async function exchangeCodeForToken(
     redirect_uri: redirectUri,
   };
 
-  const response = await fetch(config.tokenUrl, {
+  const response = await fetchWithCorrelation(config.tokenUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -131,7 +133,7 @@ export async function fetchProviderProfile(
 ): Promise<OAuthProviderProfile> {
   const config = getProviderConfig(provider);
 
-  const response = await fetch(config.userInfoUrl, {
+  const response = await fetchWithCorrelation(config.userInfoUrl, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",

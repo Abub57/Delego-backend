@@ -13,8 +13,6 @@ import { Redis } from "ioredis";
 import { createLogger, type Logger } from "@delegolabs/utils";
 import { estimateTransactionFee, type FeeEstimate } from "@delegolabs/payments/fee-estimator";
 
-const log = createLogger("wallet:adaptiveFeeEstimator", process.env.LOG_LEVEL ?? "info");
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -54,7 +52,6 @@ export const DEFAULT_ADAPTIVE_CONFIG: AdaptiveFeeConfig = {
 };
 
 const CACHE_KEY = "fee:adaptive:estimate";
-const CONGESTION_KEY = "fee:adaptive:congestion";
 const METRICS_KEY = "fee:adaptive:metrics";
 
 // ---------------------------------------------------------------------------
@@ -121,13 +118,14 @@ export class AdaptiveFeeEstimator {
       lastUpdated: new Date().toISOString(),
     });
 
+    const estAny = estimate as any;
     this.log.info("Fee estimate fetched and cached", {
       feeStroops,
       congestionLevel: congestion,
       ttlSeconds: ttl,
-      p50: estimate.p50,
-      p95: estimate.p95,
-      p99: estimate.p99,
+      p50: estAny.p50,
+      p95: estAny.p95,
+      p99: estAny.p99,
     });
 
     return { ...result, fromCache: false };
@@ -137,9 +135,10 @@ export class AdaptiveFeeEstimator {
    * Assess network congestion based on fee estimate percentiles.
    */
   assessCongestion(estimate: FeeEstimate): "calm" | "moderate" | "surging" {
-    const p50 = Number(estimate.p50 ?? 100);
-    const p95 = Number(estimate.p95 ?? 100);
-    const p99 = Number(estimate.p99 ?? 100);
+    const est = estimate as any;
+    const p50 = Number(est.p50 ?? 100);
+    const p95 = Number(est.p95 ?? 100);
+    const p99 = Number(est.p99 ?? 100);
 
     // Check absolute fee level (p95 > threshold = surging)
     if (p95 > this.config.congestionThresholdPercentile) {
@@ -229,9 +228,10 @@ export class AdaptiveFeeEstimator {
     congestion: "calm" | "moderate" | "surging";
   }> {
     const estimate = await estimateTransactionFee(horizonUrl, "p99");
-    const p50 = Number(estimate.p50 ?? 100);
-    const p95 = Number(estimate.p95 ?? 100);
-    const p99 = Number(estimate.p99 ?? 100);
+    const est = estimate as any;
+    const p50 = Number(est.p50 ?? 100);
+    const p95 = Number(est.p95 ?? 100);
+    const p99 = Number(est.p99 ?? 100);
     const delta = p99 - p50;
     const deltaRatio = p50 > 0 ? delta / p50 : 0;
 

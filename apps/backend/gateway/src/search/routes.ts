@@ -1,12 +1,14 @@
 /**
  * HTTP route handlers for product search.
  * Issue #263: POST /api/v1/search/products — semantic vector search endpoint.
+ * Issue #389: GET /api/v1/search/embedding-cache/metrics — embedding cache metrics.
  */
 
 import type { RouteHandler } from "@delegolabs/utils";
 import { badRequest, internalError, success } from "../errors.js";
 import { readJsonBody } from "../request.js";
 import { searchProducts } from "./service.js";
+import { getEmbeddingCacheMetrics } from "./embeddings.js";
 import type { SearchProductsInput } from "./types.js";
 
 /**
@@ -50,5 +52,20 @@ export const searchProductsHandler: RouteHandler = async (req, res, _params) => 
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     return internalError(res, error.message, req, { stack: error.stack });
+  }
+};
+
+/**
+ * GET /api/v1/search/embedding-cache/metrics
+ *
+ * Returns embedding cache metrics including hit rate, cache size, and evictions.
+ */
+export const embeddingCacheMetricsHandler: RouteHandler = async (_req, res) => {
+  try {
+    const metrics = getEmbeddingCacheMetrics();
+    return success(res, metrics);
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    return internalError(res, error.message);
   }
 };

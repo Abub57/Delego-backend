@@ -12,6 +12,7 @@
  */
 
 import { Horizon, Asset, StrKey } from '@stellar/stellar-sdk';
+import type { PathPaymentQuoteRequest, PathPaymentQuoteResponse, PathHop } from './types.js';
 
 /** Buffer added to sourceAmountMax (0.5%) */
 const SOURCE_AMOUNT_BUFFER = 0.005;

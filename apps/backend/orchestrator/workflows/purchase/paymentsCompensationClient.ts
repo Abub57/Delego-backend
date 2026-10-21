@@ -7,7 +7,7 @@
  * default stub so unit tests never need a live payments service.
  */
 import type { ApiResponse } from "@delegolabs/types";
-import { createLogger } from "@delegolabs/utils";
+import { createLogger, tracedFetch } from "@delegolabs/utils";
 
 const log = createLogger("orchestrator:payments-compensation-client", process.env.LOG_LEVEL ?? "info");
 
@@ -54,7 +54,7 @@ export const defaultPaymentsCompensationClient: PaymentsCompensationClient = {
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await tracedFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(body),

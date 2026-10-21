@@ -1,18 +1,47 @@
 /**
- * Real-Time Soroban Contract Event Ingestion Worker
+ * Real-Time Soroban RPC Event Listener with Missed-Ledger Backfill (Issue #366)
  *
- * Continuous background poller that streams contract events
- * (deposit, release, dispute, refund) from Soroban RPC,
- * stores a cursor in Redis for at-least-once delivery,
- * and publishes normalized events to a Redis Stream.
+ * Extends the original continuous poller (#285) with three capabilities required
+ * by issue #366:
  *
- * Closes #285
+ *   1. DURABLE CHECKPOINTS — Every successful ingestion batch advances a row in
+ *      `soroban_event_sync_checkpoints` (PostgreSQL).  On service startup the worker
+ *      reads that row to discover the last successfully processed ledger sequence.
+ *      Unlike the Redis CursorStore (still maintained for real-time cursor tracking),
+ *      the PostgreSQL checkpoint survives Redis flushes, TTL evictions, and pod
+ *      restarts — closing the missed-event window the issue describes.
+ *
+ *   2. MISSED-LEDGER BACKFILL — On startup, after loading the durable checkpoint,
+ *      the worker calls `getEvents` with `startLedger = lastLedgerSequence` and
+ *      pages through the full range up to the current ledger before switching to
+ *      normal real-time polling.  This fills the gap created by any downtime.
+ *
+ *   3. DEDUPLICATION — Before writing each event to the Redis Stream the worker
+ *      checks `ProcessedEventStore` (backed by `soroban_processed_events` in
+ *      PostgreSQL).  Events already present are silently skipped, preventing
+ *      double-processing during backfill or at-least-once RPC re-delivery.
+ *
+ * The Redis CursorStore (from #285) is kept as a fast secondary cursor that
+ * avoids an extra Postgres read on every normal poll cycle.  On startup, if the
+ * PostgreSQL checkpoint is newer/higher than the Redis cursor, the PostgreSQL
+ * value takes precedence and the Redis cursor is refreshed to match.
+ *
+ * Closes #285, Closes #366
  */
 
 import { Redis } from "ioredis";
 import { createLogger, type Logger } from "@delegolabs/utils";
-
-const log = createLogger("cdc:sorobanEvents", process.env.LOG_LEVEL ?? "info");
+import type { Pool } from "pg";
+import {
+  type CheckpointStore,
+  type EventSyncCheckpoint,
+  type ProcessedEventStore,
+  InMemoryCheckpointStore,
+  InMemoryProcessedEventStore,
+  PostgresCheckpointStore,
+  PostgresProcessedEventStore,
+} from "./checkpointStore.js";
+import { waitForPoolCapacity } from "../db.js";
 
 // ---------------------------------------------------------------------------
 // Types (matching issue spec)
@@ -31,6 +60,8 @@ export interface NormalizedContractEvent {
   ledger: number;
   txHash: string;
   timestamp: string;
+  /** Soroban RPC-assigned event id — used as the dedup key. */
+  eventId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,10 +128,19 @@ export class SorobanRpcClient {
       throw new Error(`Soroban RPC error: ${response.status} ${await response.text()}`);
     }
 
-    const result = await response.json() as any;
+    const result = (await response.json()) as {
+      error?: { message?: string };
+      result?: {
+        events?: RawSorobanEvent[];
+        cursor?: string;
+        latestLedger?: number;
+      };
+    };
 
     if (result.error) {
-      throw new Error(`Soroban RPC error: ${result.error.message ?? JSON.stringify(result.error)}`);
+      throw new Error(
+        `Soroban RPC error: ${result.error.message ?? JSON.stringify(result.error)}`
+      );
     }
 
     return {
@@ -116,6 +156,7 @@ export interface RawSorobanEvent {
   ledger: number;
   ledgerClosedAt: string;
   contractId: string;
+  /** Soroban RPC-assigned unique event identifier. */
   id: string;
   pagingToken: string;
   topic: string[];
@@ -125,7 +166,7 @@ export interface RawSorobanEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Cursor Store
+// CursorStore (Redis — fast, secondary, at-least-once)
 // ---------------------------------------------------------------------------
 
 export class CursorStore {
@@ -137,9 +178,7 @@ export class CursorStore {
     this.log = logger ?? createLogger("cdc:cursorStore", process.env.LOG_LEVEL ?? "info");
   }
 
-  /**
-   * Save the event cursor for a contract — guarantees at-least-once ingestion.
-   */
+  /** Persist the latest cursor so normal polls resume quickly. */
   async saveCursor(cursor: ContractEventCursor): Promise<void> {
     const key = `${CURSOR_KEY_PREFIX}${cursor.contractId}`;
     await this.redis.hset(key, {
@@ -147,12 +186,10 @@ export class CursorStore {
       cursorToken: cursor.cursorToken ?? "",
       updatedAt: new Date().toISOString(),
     });
-    this.log.debug("Cursor saved", cursor);
+    this.log.debug("Cursor saved", cursor as unknown as Record<string, unknown>);
   }
 
-  /**
-   * Load the saved cursor for a contract to resume from.
-   */
+  /** Load the Redis cursor.  May return null after a Redis flush. */
   async loadCursor(contractId: string): Promise<ContractEventCursor | null> {
     const key = `${CURSOR_KEY_PREFIX}${contractId}`;
     const data = await this.redis.hgetall(key);
@@ -168,9 +205,7 @@ export class CursorStore {
     };
   }
 
-  /**
-   * Clear cursor for a contract (used in tests or manual reset).
-   */
+  /** Clear cursor (used in tests or manual reset). */
   async clearCursor(contractId: string): Promise<void> {
     await this.redis.del(`${CURSOR_KEY_PREFIX}${contractId}`);
   }
@@ -181,16 +216,15 @@ export class CursorStore {
 // ---------------------------------------------------------------------------
 
 export function normalizeEvent(raw: RawSorobanEvent): NormalizedContractEvent {
-  const topic = raw.topic.length > 0
-    ? raw.topic[0].replace(/"/g, "")
-    : "unknown";
+  const topic =
+    raw.topic.length > 0 ? raw.topic[0].replace(/"/g, "") : "unknown";
 
   let data: Record<string, unknown> = {};
   if (raw.value?.xdr) {
     data = { xdr: raw.value.xdr };
   } else if (raw.value?.str) {
     try {
-      data = JSON.parse(raw.value.str);
+      data = JSON.parse(raw.value.str) as Record<string, unknown>;
     } catch {
       data = { raw: raw.value.str };
     }
@@ -203,6 +237,7 @@ export function normalizeEvent(raw: RawSorobanEvent): NormalizedContractEvent {
     ledger: raw.ledger,
     txHash: raw.txHash,
     timestamp: raw.ledgerClosedAt,
+    eventId: raw.id,
   };
 }
 
@@ -210,51 +245,107 @@ export function normalizeEvent(raw: RawSorobanEvent): NormalizedContractEvent {
 // Ingestion Worker
 // ---------------------------------------------------------------------------
 
+export interface SorobanIngestionWorkerOptions {
+  rpcClient?: SorobanRpcClient;
+  cursorStore?: CursorStore;
+  /** PostgreSQL-backed checkpoint store. Defaults to InMemoryCheckpointStore. */
+  checkpointStore?: CheckpointStore;
+  /** PostgreSQL-backed processed-event dedup store. Defaults to InMemoryProcessedEventStore. */
+  processedEventStore?: ProcessedEventStore;
+  /**
+   * The CDC Postgres pool backing the stores above. When set, the worker
+   * throttles itself against {@link waitForPoolCapacity} before each bulk
+   * page (Issue #335) instead of hammering a saturated pool during a ledger
+   * sync spike.
+   */
+  pgPool?: Pool;
+  logger?: Logger;
+}
+
 export class SorobanEventIngestionWorker {
   private rpcClient: SorobanRpcClient;
   private cursorStore: CursorStore;
+  private checkpointStore: CheckpointStore;
+  private processedEventStore: ProcessedEventStore;
   private redis: Redis;
   private config: SorobanRpcConfig;
   private log: Logger;
   private running: boolean = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
+  private pgPool?: Pool;
 
   constructor(
     redis: Redis,
     config: SorobanRpcConfig,
-    options?: {
-      rpcClient?: SorobanRpcClient;
-      cursorStore?: CursorStore;
-      logger?: Logger;
-    },
+    options?: SorobanIngestionWorkerOptions
   ) {
     this.redis = redis;
     this.config = config;
     this.rpcClient = options?.rpcClient ?? new SorobanRpcClient(config.rpcUrl);
     this.cursorStore = options?.cursorStore ?? new CursorStore(redis);
-    this.log = options?.logger ?? createLogger("cdc:sorobanEvents", process.env.LOG_LEVEL ?? "info");
+    this.checkpointStore =
+      options?.checkpointStore ?? new InMemoryCheckpointStore();
+    this.processedEventStore =
+      options?.processedEventStore ?? new InMemoryProcessedEventStore();
+    this.pgPool = options?.pgPool;
+    this.log =
+      options?.logger ??
+      createLogger("cdc:sorobanEvents", process.env.LOG_LEVEL ?? "info");
   }
 
   /**
-   * Start the background ingestion worker.
+   * Backpressure gate (Issue #335). Called before every bulk page — both the
+   * startup backfill and each real-time poll — so a ledger-sync spike waits
+   * out pool saturation (exponential backoff) instead of piling up query
+   * attempts that starve the rest of the service's connection budget. A
+   * no-op when the worker was built without a `pgPool` (tests / local dev
+   * with in-memory stores).
    */
-  start(): void {
+  private async throttleForPoolCapacity(): Promise<void> {
+    if (!this.pgPool) return;
+    await waitForPoolCapacity(this.pgPool, { log: this.log });
+  }
+
+  // -------------------------------------------------------------------------
+  // Lifecycle
+  // -------------------------------------------------------------------------
+
+  /**
+   * Start the worker.
+   *
+   * On startup the worker:
+   *   1. Reads the durable PostgreSQL checkpoint for each contract.
+   *   2. Runs a backfill from `lastLedgerSequence` to the current ledger to
+   *      recover any events missed during downtime.
+   *   3. Enters the normal real-time polling loop.
+   */
+  async start(): Promise<void> {
     if (this.running) {
       this.log.warn("Ingestion worker already running");
       return;
     }
     this.running = true;
-    this.log.info("Soroban event ingestion started", {
+    this.log.info("Soroban event ingestion starting", {
       rpcUrl: this.config.rpcUrl,
       contracts: this.config.contractIds,
       pollIntervalMs: this.config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     });
+
+    // Backfill missed ledgers before entering the live-polling loop.
+    try {
+      await this.backfillAll();
+    } catch (err) {
+      this.log.error("Startup backfill failed — continuing to live polling", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     this.poll();
   }
 
   /**
-   * Stop the background ingestion worker.
+   * Stop the worker gracefully.
    */
   stop(): void {
     this.running = false;
@@ -265,9 +356,127 @@ export class SorobanEventIngestionWorker {
     this.log.info("Soroban event ingestion stopped");
   }
 
+  // -------------------------------------------------------------------------
+  // Startup backfill (Issue #366 — core requirement)
+  // -------------------------------------------------------------------------
+
   /**
-   * Main poll loop — fetches events, normalizes, publishes, saves cursor.
+   * For every configured contract, load the durable PostgreSQL checkpoint and
+   * page through all events from `lastLedgerSequence` (exclusive) to the current
+   * ledger.  Events that were already published (present in `processedEventStore`)
+   * are skipped to prevent double-processing.
+   *
+   * This fills the gap that would otherwise occur when the service restarts after
+   * a deployment or network interruption.
    */
+  async backfillAll(): Promise<void> {
+    this.log.info("Running startup missed-ledger backfill", {
+      contracts: this.config.contractIds,
+    });
+    for (const contractId of this.config.contractIds) {
+      await this.backfillContract(contractId);
+    }
+    this.log.info("Startup backfill complete");
+  }
+
+  /**
+   * Backfill a single contract from its last durable checkpoint to the current
+   * ledger by paging through `getEvents` until no more events are returned.
+   *
+   * The PostgreSQL checkpoint takes precedence over the Redis cursor because
+   * Redis may have been flushed, while PostgreSQL persists across restarts.
+   * After backfill succeeds, the Redis cursor is synced to the recovered
+   * ledger so normal polling picks up seamlessly.
+   */
+  async backfillContract(contractId: string): Promise<number> {
+    // 1. Load durable PostgreSQL checkpoint.
+    const pgCheckpoint = await this.checkpointStore.get(contractId);
+
+    // 2. Also load the Redis cursor as a fallback / comparison.
+    const redisCursor = await this.cursorStore.loadCursor(contractId);
+
+    // 3. Take the higher of the two so we never go backwards.
+    const pgLedger = pgCheckpoint?.lastLedgerSequence ?? 0;
+    const redisLedger = redisCursor?.lastLedgerSequence ?? 0;
+    const startLedger = Math.max(pgLedger, redisLedger);
+
+    if (startLedger === 0) {
+      this.log.info("No checkpoint found for contract, skipping backfill", {
+        contractId,
+      });
+      return 0;
+    }
+
+    this.log.info("Backfilling missed events for contract", {
+      contractId,
+      fromLedger: startLedger,
+    });
+
+    let totalBackfilled = 0;
+    let pageCursor: string | undefined = undefined;
+    let latestLedger = startLedger;
+
+    // Page through events from the last checkpoint to the current ledger.
+    while (true) {
+      // Throttle against pool saturation before firing off another bulk page
+      // of dedup/checkpoint queries (Issue #335).
+      await this.throttleForPoolCapacity();
+
+      const response = await this.rpcClient.getEvents({
+        startLedger: pageCursor ? undefined : startLedger,
+        cursor: pageCursor,
+        limit: this.config.pageSize ?? DEFAULT_PAGE_SIZE,
+        filters: [{ type: "contract", contractIds: [contractId] }],
+      });
+
+      if (response.events.length === 0) {
+        // No more events — backfill is complete.
+        latestLedger = response.latestLedger > 0
+          ? response.latestLedger
+          : latestLedger;
+        break;
+      }
+
+      const ingested = await this.publishEvents(response.events);
+      totalBackfilled += ingested;
+      latestLedger = response.latestLedger;
+
+      const lastEvent = response.events[response.events.length - 1];
+
+      // If the page was smaller than the limit we've reached the end.
+      if (response.events.length < (this.config.pageSize ?? DEFAULT_PAGE_SIZE)) {
+        // Advance checkpoint with the last event from this page.
+        await this.advanceCheckpoint(contractId, latestLedger, lastEvent.id);
+        break;
+      }
+
+      // Use the RPC cursor token to fetch the next page.
+      pageCursor = response.cursor || lastEvent.pagingToken;
+      if (!pageCursor) {
+        await this.advanceCheckpoint(contractId, latestLedger, lastEvent.id);
+        break;
+      }
+
+      // Advance checkpoint after each successfully ingested page so that a
+      // crash mid-backfill resumes from the right place, not from scratch.
+      await this.advanceCheckpoint(contractId, latestLedger, lastEvent.id);
+    }
+
+    if (totalBackfilled > 0) {
+      this.log.info("Backfill complete for contract", {
+        contractId,
+        totalBackfilled,
+        latestLedger,
+      });
+    }
+
+    return totalBackfilled;
+  }
+
+  // -------------------------------------------------------------------------
+  // Real-time polling loop
+  // -------------------------------------------------------------------------
+
   private poll(): void {
     if (!this.running) return;
 
@@ -290,17 +499,16 @@ export class SorobanEventIngestionWorker {
       })
       .finally(() => {
         if (this.running) {
-          const delay = this.reconnectAttempts > 0
-            ? RECONNECT_BACKOFF_MS * this.reconnectAttempts
-            : this.config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+          const delay =
+            this.reconnectAttempts > 0
+              ? RECONNECT_BACKOFF_MS * this.reconnectAttempts
+              : (this.config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
           this.pollTimer = setTimeout(() => this.poll(), delay);
         }
       });
   }
 
-  /**
-   * Ingest events for all configured contracts.
-   */
+  /** Ingest events for all configured contracts in one poll cycle. */
   async ingestAll(): Promise<number> {
     let totalIngested = 0;
     for (const contractId of this.config.contractIds) {
@@ -314,15 +522,31 @@ export class SorobanEventIngestionWorker {
   }
 
   /**
-   * Ingest events for a single contract — fetch, normalize, publish, save cursor.
+   * Ingest events for a single contract in real-time mode.
+   *
+   * Uses the Redis cursor for fast resume within a session.  After each
+   * successful batch the PostgreSQL checkpoint is also advanced so the next
+   * restart can backfill any gap.
    */
   async ingestContract(contractId: string): Promise<number> {
-    // Load saved cursor for at-least-once delivery
+    // Throttle against pool saturation before this cycle's dedup/checkpoint
+    // queries (Issue #335) — keeps a burst of real-time poll cycles from
+    // stacking on top of an already-saturated pool during a ledger spike.
+    await this.throttleForPoolCapacity();
+
+    // Redis cursor — fast per-session resume.
     const cursor = await this.cursorStore.loadCursor(contractId);
 
-    // Fetch events from Soroban RPC
+    // If the Redis cursor is missing (post-flush), fall back to the
+    // PostgreSQL checkpoint to avoid re-ingesting from ledger 0.
+    let startLedger = cursor?.lastLedgerSequence;
+    if (!startLedger || startLedger === 0) {
+      const pgCheckpoint = await this.checkpointStore.get(contractId);
+      startLedger = pgCheckpoint?.lastLedgerSequence ?? undefined;
+    }
+
     const response = await this.rpcClient.getEvents({
-      startLedger: cursor?.lastLedgerSequence,
+      startLedger,
       cursor: cursor?.cursorToken,
       limit: this.config.pageSize ?? DEFAULT_PAGE_SIZE,
       filters: [{ type: "contract", contractIds: [contractId] }],
@@ -332,47 +556,133 @@ export class SorobanEventIngestionWorker {
       return 0;
     }
 
-    // Normalize and publish events to Redis Stream
-    let ingested = 0;
-    for (const rawEvent of response.events) {
-      const normalized = normalizeEvent(rawEvent);
+    const ingested = await this.publishEvents(response.events);
 
-      // Publish to Redis Stream (XADD with auto-ID)
-      await this.redis.xadd(
-        STREAM_KEY,
-        "*",
-        "contractId", normalized.contractId,
-        "topic", normalized.topic,
-        "data", JSON.stringify(normalized.data),
-        "ledger", String(normalized.ledger),
-        "txHash", normalized.txHash,
-        "timestamp", normalized.timestamp,
-      );
-      ingested++;
+    if (response.events.length > 0) {
+      const lastEvent = response.events[response.events.length - 1];
+
+      // Advance both the Redis cursor (fast path) and the PostgreSQL checkpoint
+      // (durable path) after each successful batch.
+      await this.cursorStore.saveCursor({
+        contractId,
+        lastLedgerSequence: response.latestLedger,
+        cursorToken: response.cursor,
+      });
+
+      await this.advanceCheckpoint(contractId, response.latestLedger, lastEvent.id);
     }
-
-    // Save updated cursor — guarantees resume without reprocessing
-    const newCursor: ContractEventCursor = {
-      contractId,
-      lastLedgerSequence: response.latestLedger,
-      cursorToken: response.cursor,
-    };
-    await this.cursorStore.saveCursor(newCursor);
 
     this.log.debug("Ingested events for contract", {
       contractId,
-      count: ingested,
+      total: response.events.length,
+      newlyPublished: ingested,
       latestLedger: response.latestLedger,
     });
 
     return ingested;
   }
 
+  // -------------------------------------------------------------------------
+  // Event publishing with deduplication (Issue #366)
+  // -------------------------------------------------------------------------
+
   /**
-   * Get the current cursor for a contract (for monitoring/debugging).
+   * Publish a batch of raw Soroban events to the Redis Stream, skipping any
+   * event whose id has already been recorded in `processedEventStore`.
+   *
+   * @returns The number of newly published (non-duplicate) events.
    */
+  async publishEvents(rawEvents: RawSorobanEvent[]): Promise<number> {
+    if (rawEvents.length === 0) return 0;
+
+    const normalizedEvents = rawEvents.map(normalizeEvent);
+
+    // --- DEDUPLICATION: one batched lookup for the whole page (Issue #335)
+    // instead of one SELECT per event — the fix for a bulk backfill/poll
+    // page opening dozens of sequential queries against a pool capped at a
+    // handful of connections during a ledger-sync spike.
+    const alreadyProcessed = await this.processedEventStore.hasMany(
+      normalizedEvents.map((e) => e.eventId)
+    );
+
+    const toPublish = normalizedEvents.filter((normalized) => {
+      if (alreadyProcessed.has(normalized.eventId)) {
+        this.log.debug("Skipping duplicate Soroban event", {
+          eventId: normalized.eventId,
+          contractId: normalized.contractId,
+          ledger: normalized.ledger,
+        });
+        return false;
+      }
+      return true;
+    });
+
+    // --- PUBLISH to Redis Stream (Redis, not Postgres — no pool pressure) ---
+    for (const normalized of toPublish) {
+      await this.redis.xadd(
+        STREAM_KEY,
+        "*",
+        "eventId",    normalized.eventId,
+        "contractId", normalized.contractId,
+        "topic",      normalized.topic,
+        "data",       JSON.stringify(normalized.data),
+        "ledger",     String(normalized.ledger),
+        "txHash",     normalized.txHash,
+        "timestamp",  normalized.timestamp
+      );
+    }
+
+    // --- RECORD as published: one batched INSERT for the whole page
+    // (Issue #335), instead of one INSERT per event.
+    await this.processedEventStore.markPublishedMany(
+      toPublish.map((normalized) => ({
+        eventId: normalized.eventId,
+        contractId: normalized.contractId,
+        ledgerSequence: normalized.ledger,
+      }))
+    );
+
+    return toPublish.length;
+  }
+
+  // -------------------------------------------------------------------------
+  // Checkpoint management
+  // -------------------------------------------------------------------------
+
+  /**
+   * Advance the durable PostgreSQL checkpoint after a successfully ingested
+   * batch or backfill page.
+   */
+  private async advanceCheckpoint(
+    contractId: string,
+    lastLedgerSequence: number,
+    lastEventId: string
+  ): Promise<void> {
+    const checkpoint: EventSyncCheckpoint = {
+      lastLedgerSequence,
+      lastEventId,
+      syncedAt: new Date(),
+    };
+    await this.checkpointStore.set(contractId, checkpoint);
+    this.log.debug("Checkpoint advanced", {
+      contractId,
+      lastLedgerSequence,
+      lastEventId,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Monitoring helpers
+  // -------------------------------------------------------------------------
+
+  /** Get the current Redis cursor for a contract (fast path). */
   async getCursor(contractId: string): Promise<ContractEventCursor | null> {
-    return await this.cursorStore.loadCursor(contractId);
+    return this.cursorStore.loadCursor(contractId);
+  }
+
+  /** Get the durable PostgreSQL checkpoint for a contract. */
+  async getCheckpoint(contractId: string): Promise<EventSyncCheckpoint | null> {
+    return this.checkpointStore.get(contractId);
   }
 }
 
@@ -380,10 +690,43 @@ export class SorobanEventIngestionWorker {
 // Factory
 // ---------------------------------------------------------------------------
 
+export interface CreateSorobanWorkerOptions {
+  logger?: Logger;
+  /**
+   * Provide a pg.Pool to enable the PostgreSQL-backed checkpoint and dedup
+   * stores.  When omitted, in-memory stores are used (suitable for tests
+   * and local development without a database).
+   */
+  pgPool?: Pool;
+}
+
+/**
+ * Creates and wires a `SorobanEventIngestionWorker` with the appropriate
+ * checkpoint and dedup stores based on the environment.
+ *
+ * Production use: pass a `pgPool` to enable durable PostgreSQL persistence.
+ * Test / local dev: omit `pgPool` to use in-memory stores.
+ */
 export function createSorobanEventIngestionWorker(
   redis: Redis,
   config: SorobanRpcConfig,
-  options?: { logger?: Logger },
+  options?: CreateSorobanWorkerOptions
 ): SorobanEventIngestionWorker {
-  return new SorobanEventIngestionWorker(redis, config, options);
+  const checkpointStore: CheckpointStore = options?.pgPool
+    ? new PostgresCheckpointStore(options.pgPool, options.logger)
+    : new InMemoryCheckpointStore();
+
+  const processedEventStore: ProcessedEventStore = options?.pgPool
+    ? new PostgresProcessedEventStore(options.pgPool, options.logger)
+    : new InMemoryProcessedEventStore();
+
+  return new SorobanEventIngestionWorker(redis, config, {
+    checkpointStore,
+    processedEventStore,
+    pgPool: options?.pgPool,
+    logger: options?.logger,
+  });
 }
+
+// Re-export checkpoint types so callers can type against them.
+export type { EventSyncCheckpoint, CheckpointStore, ProcessedEventStore } from "./checkpointStore.js";

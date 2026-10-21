@@ -20,6 +20,7 @@ import type {
   Queryable,
 } from "./types.js";
 import { computeEntryHash } from "./hashChain.js";
+import { dispatchAuditLogEntry } from "./cefExporter.js";
 
 export class AuditLogError extends Error {
   constructor(message: string) {
@@ -175,7 +176,9 @@ export async function recordAuditEntry(
     ]
   );
 
-  return mapRow(result.rows[0]);
+  const entry = mapRow(result.rows[0]);
+  dispatchAuditLogEntry(entry);
+  return entry;
 }
 
 const DEFAULT_LIMIT = 20;
@@ -245,10 +248,15 @@ export async function queryAuditLog(db: Queryable, query: AuditQuery): Promise<A
  * so verification always walks the full chain or a contiguous window of
  * it, never a single table's subset (that would skip links and look like
  * tampering).
+ *
+ * `afterSequenceNum` lets a caller page through the chain without loading
+ * it all at once — the returned rows are still strictly `sequence_num`
+ * ascending and contiguous from the given point, so a paged walk
+ * (`verifyStoredChain`) never skips a link.
  */
 export async function getChainSegment(
   db: Queryable,
-  opts: { from?: Date; to?: Date; limit?: number } = {}
+  opts: { from?: Date; to?: Date; limit?: number; afterSequenceNum?: number } = {}
 ): Promise<AuditLogEntry[]> {
   const conditions: string[] = [];
   const values: unknown[] = [];
@@ -260,6 +268,9 @@ export async function getChainSegment(
 
   if (opts.from) addCondition("occurred_at >= $N", opts.from);
   if (opts.to) addCondition("occurred_at <= $N", opts.to);
+  if (opts.afterSequenceNum !== undefined) {
+    addCondition("sequence_num > $N", opts.afterSequenceNum);
+  }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const limit = opts.limit ?? 10_000;

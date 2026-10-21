@@ -35,6 +35,16 @@ spec:
                 secretKeyRef:
                   name: delego-db
                   key: database-url
+            - name: ORCHESTRATOR_PAYMENTS_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: delego-service-auth
+                  key: orchestrator-payments-service-token
+            - name: PAYMENTS_WALLET_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: delego-service-auth
+                  key: payments-wallet-service-token
             - name: WALLET_SERVICE_URL
               value: http://delego-wallet:3012
             - name: SOROBAN_RPC_URL

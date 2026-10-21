@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test src/health-check.test.js src/database-migrations.test.js src/testcontainers-fixtures.test.js src/saga-recovery.integration.test.js src/outbox-relay-dedupe.integration.test.js src/auth-roundtrip.integration.test.js src/ownership-rules.integration.test.js src/rate-limit.integration.test.js src/time-series-partitioning.integration.test.js",
+    "test": "node --test src/health-check.test.js src/database-migrations.test.js src/testcontainers-fixtures.test.js src/saga-recovery.integration.test.js src/outbox-relay-dedupe.integration.test.js src/auth-roundtrip.integration.test.js src/ownership-rules.integration.test.js src/rate-limit.integration.test.js src/time-series-partitioning.integration.test.js src/db-vacuum-bloat.integration.test.js src/cert-expiry.integration.test.js src/exchange-rate-cache.integration.test.js",
     "test:payments-escrow": "NODE_ENV=test MOCK_REDIS=true node --test src/payments-escrow.testnet.test.js",
     "typecheck": "echo 'N/A'"
   },

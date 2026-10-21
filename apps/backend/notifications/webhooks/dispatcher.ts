@@ -1,5 +1,5 @@
 /**
- * Outbound webhook event dispatch (Issue #102, #112).
+ * Outbound webhook event dispatch (Issue #102, #112, #381).
  *
  * Fans an event out to every active, matching webhook subscriber, signs
  * each payload, and records the delivery outcome via the tracker. The HTTP
@@ -10,15 +10,21 @@
  * - Uses "merchant-webhooks" queue with exponential backoff (1m, 5m, 30m, 2h, 24h)
  * - Moves failed deliveries to DLQ after 5 attempts
  * - Uses X-Delego-Signature header for HMAC-SHA256 verification
+ *
+ * Issue #381 — secret rotation:
+ * - When a webhook is within its 48-hour rotation grace period, the dispatcher
+ *   calls signWebhookPayloadDual() and attaches both X-Delego-Signature and
+ *   X-Delego-Signature-Previous, allowing receivers to verify with either key.
  */
 
 import { createLogger } from "@delegolabs/utils";
 import { randomUUID } from "node:crypto";
-import { signWebhookPayload, WEBHOOK_SIGNATURE_HEADER } from "./hmac.js";
+import { signWebhookPayload, signWebhookPayloadDual, WEBHOOK_SIGNATURE_HEADER } from "./hmac.js";
 import type { WebhookDeliveryTracker } from "./deliveryTracker.js";
 import type { WebhookRegistry } from "./registry.js";
 import type { Webhook, DeliveryStatus } from "./types.js";
 import type { WebhookBullQueue, WebhookPayload } from "./bullQueue.js";
+import type { WebhookSecretRotationService } from "./secretRotation.js";
 
 const log = createLogger("notifications:webhooks:dispatcher", process.env.LOG_LEVEL ?? "info");
 
@@ -51,6 +57,7 @@ export class WebhookDispatcher {
     private tracker: WebhookDeliveryTracker,
     private sender: WebhookSender,
     private queue?: WebhookBullQueue,
+    private rotationService?: WebhookSecretRotationService,
   ) {}
 
   /**
@@ -171,9 +178,27 @@ export class WebhookDispatcher {
       timestamp: new Date().toISOString(),
       data: payload,
     });
+
+    // Issue #381: use dual-signing headers when the rotation service reports
+    // an active grace period for this webhook; otherwise fall back to the
+    // single-secret path using the webhook's stored secret directly.
+    const rotationState = this.rotationService?.getState(webhook.id);
+    const signatureHeaders: Record<string, string> =
+      rotationState && this.rotationService?.isInGracePeriod(webhook.id)
+        ? signWebhookPayloadDual(body, rotationState.currentSecret, rotationState.previousSecret)
+        : {
+            // When a rotation state exists but is outside the grace period, use the
+            // rotated secret (not the stale webhook.secret); fall back to webhook.secret
+            // if no rotation has ever been initiated.
+            [WEBHOOK_SIGNATURE_HEADER]: signWebhookPayload(
+              body,
+              rotationState?.currentSecret ?? webhook.secret,
+            ),
+          };
+
     const headers = {
       "Content-Type": "application/json",
-      [WEBHOOK_SIGNATURE_HEADER]: signWebhookPayload(body, webhook.secret),
+      ...signatureHeaders,
       "X-Webhook-Id": webhook.id,
       "X-Webhook-Version": String(webhook.version),
       ...webhook.headers,

@@ -100,7 +100,12 @@ export class ColumnEncryptor {
 
     const field = encryptField(plaintext, dataKey.key, this.config.algorithm, context);
 
-    await this.audit.record({
+    // Audit recording is deliberately not part of the hot path (#333) —
+    // record() synchronously appends to the in-memory ring buffer before
+    // returning, so the record exists immediately for callers of
+    // audit.list()/listFor(), but we don't block encrypt() on an async sink
+    // write (Postgres, etc.) that could blow the <2ms per-field budget.
+    this.recordAudit({
       operation: "encrypt",
       keyId: dataKey.keyId,
       keyVersion: version,
@@ -135,7 +140,7 @@ export class ColumnEncryptor {
     const role = options.actorRole ?? "system";
     const decision = this.access.decide(table, column, role);
     if (!decision.allowed) {
-      await this.audit.record({
+      this.recordAudit({
         operation: "decrypt",
         keyId: this.config.keyId,
         keyVersion: field.keyVersion,
@@ -157,7 +162,7 @@ export class ColumnEncryptor {
     let plaintext: string;
     try {
       plaintext = decryptField(field, dataKey.key, context);
-      await this.audit.record({
+      this.recordAudit({
         operation: "decrypt",
         keyId: dataKey.keyId,
         keyVersion: field.keyVersion,
@@ -169,7 +174,7 @@ export class ColumnEncryptor {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.audit.record({
+      this.recordAudit({
         operation: "decrypt",
         keyId: dataKey.keyId,
         keyVersion: field.keyVersion,
@@ -196,6 +201,23 @@ export class ColumnEncryptor {
     const version = await this.activeVersion();
     const dataKey = await this.keyProvider.getDataKey(version);
     return blindIndex(value, dataKey.key, `${table}.${column}`);
+  }
+
+  /**
+   * Fire-and-forget audit recording (#333). `KeyAccessAuditor.record()`
+   * appends to its in-memory ring buffer synchronously before it reaches
+   * any `await`, so the record is visible to `audit.list()`/`listFor()`
+   * immediately — but we don't hold the encrypt/decrypt hot path open for
+   * whatever an external sink's I/O takes.
+   */
+  private recordAudit(input: Parameters<KeyAccessAuditor["record"]>[0]): void {
+    void this.audit.record(input).catch((err: unknown) => {
+      // KeyAccessAuditor.record() already swallows sink errors internally;
+      // this only guards against an unexpected throw outside that path.
+      const message = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.error("Unexpected error recording key-access audit entry", message);
+    });
   }
 
   private assertRegistry(table: string, column: string): PiiColumn {

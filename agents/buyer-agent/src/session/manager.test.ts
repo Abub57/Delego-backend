@@ -1,7 +1,7 @@
 /**
  * Session Manager tests — Issue #268
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { SessionManager, SessionNotFoundError } from "./manager.js";
 import type { AgentSessionState, LLMMessage } from "./types.js";
 

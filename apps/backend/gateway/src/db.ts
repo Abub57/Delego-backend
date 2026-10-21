@@ -1,5 +1,13 @@
 import { Sequelize } from "sequelize";
 import { createLogger } from "@delegolabs/utils";
+import { ServiceMetricsRegistry } from "@delegolabs/utils";
+import {
+  configureDbMetrics,
+  instrumentSequelize,
+  getSlaStatus,
+  recordQueryDuration,
+  type DbMetricsConfig,
+} from "./metrics/dbMetrics.js";
 
 const log = createLogger("gateway:db", process.env.LOG_LEVEL ?? "info");
 
@@ -19,6 +27,27 @@ export const sequelize = new Sequelize(databaseUrl, {
     timestamps: true,
   },
 });
+
+let metricsRegistry: ServiceMetricsRegistry | null = null;
+
+export function initializeDbMetrics(registry?: ServiceMetricsRegistry): void {
+  const config: Partial<DbMetricsConfig> = {
+    slowQueryThresholdMs: Number(process.env["DB_SLOW_QUERY_THRESHOLD_MS"] ?? 100),
+    enableSlowQueryLogging: process.env["DB_SLOW_QUERY_LOGGING"] !== "false",
+  };
+
+  if (process.env["DB_HISTOGRAM_BUCKETS"]) {
+    config.histogramBuckets = process.env["DB_HISTOGRAM_BUCKETS"]
+      .split(",")
+      .map((b) => Number(b.trim()));
+  }
+
+  metricsRegistry = registry ?? null;
+  configureDbMetrics(config, metricsRegistry ?? undefined);
+  instrumentSequelize(sequelize);
+
+  log.info("Database metrics initialized", config);
+}
 
 export async function connectDb(): Promise<void> {
   try {
@@ -47,7 +76,9 @@ export async function checkDatabaseHealth(timeoutMs: number = 5000): Promise<num
     
     await Promise.race([queryPromise, timeoutPromise]);
     const endTime = performance.now();
-    return endTime - startTime;
+    const durationMs = endTime - startTime;
+    recordQueryDuration("health_check", durationMs, { type: "health" });
+    return durationMs;
   } catch (err) {
     log.warn("Database health check failed", err instanceof Error ? { error: err.message } : { error: String(err) });
     throw err;
@@ -57,4 +88,7 @@ export async function checkDatabaseHealth(timeoutMs: number = 5000): Promise<num
     }
   }
 }
+
+export { getSlaStatus, recordQueryDuration, configureDbMetrics };
+export type { DbMetricsConfig, QuerySlaMetric, SlaStatus } from "./metrics/dbMetrics.js";
 

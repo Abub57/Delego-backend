@@ -10,7 +10,7 @@ vi.mock("@delegolabs/utils", () => ({
   }),
 }));
 
-const VALID_ADDRESS = "GABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxy";
+const VALID_ADDRESS = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFTGXTURDM2PUOXEB2AH4";
 
 const mockRedis = {
   get: vi.fn(),

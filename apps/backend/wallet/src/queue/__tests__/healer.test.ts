@@ -10,6 +10,20 @@ vi.mock("@delegolabs/utils", () => ({
   }),
 }));
 
+vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@stellar/stellar-sdk")>();
+  return {
+    ...actual,
+    Horizon: {
+      Server: vi.fn().mockImplementation(() => ({
+        loadAccount: vi.fn().mockResolvedValue({
+          sequence: "50", // lower than expectedSequence "100" to trigger heal attempt
+        }),
+      })),
+    },
+  };
+});
+
 const mockRedis = {
   keys: vi.fn(),
   get: vi.fn(),

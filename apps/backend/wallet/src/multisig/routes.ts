@@ -27,6 +27,7 @@ import {
   listProposals,
   getProposal,
 } from "./service.js";
+import { registerCoSigningRoutes } from "./coSigningRoutes.js";
 
 async function readBody<T>(req: IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -212,5 +213,8 @@ export function registerMultiSigRoutes(): Route[] {
         }
       },
     ),
+
+    // Issue #289: Dual-control co-signing coordination
+    ...registerCoSigningRoutes(),
   ];
 }

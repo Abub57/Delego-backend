@@ -124,6 +124,42 @@ describe("GuardrailMiddleware.validateToolParams", () => {
     ).toThrow(GuardrailValidationError);
   });
 
+  it("coerces a numeric string limit (#362)", () => {
+    const result = guardrail.validateToolParams("search_products", {
+      query: "organic apples",
+      limit: "5",
+    });
+    expect(result).toMatchObject({ limit: 5 });
+  });
+
+  it("coerces a floating dollar amount into integer stroops (#362)", () => {
+    const result = guardrail.validateToolParams("initiate_checkout", {
+      delegationId: "123e4567-e89b-12d3-a456-426614174000",
+      merchantAddress: "GCMERCHANT",
+      totalAmountStroops: "10.5",
+      assetCode: "XLM",
+      rationale: "Buying groceries",
+    });
+    // 10.5 XLM = 105,000,000 stroops
+    expect(result).toMatchObject({ totalAmountStroops: "105000000" });
+  });
+
+  it("attaches a self-correction prompt to a rejection (#362)", () => {
+    let caught: unknown;
+    try {
+      guardrail.validateToolParams("add_to_cart", {
+        productId: "not-a-uuid",
+        quantity: 1,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(GuardrailValidationError);
+    expect((caught as GuardrailValidationError).selfCorrectionPrompt).toContain(
+      "add_to_cart"
+    );
+  });
+
   it("accepts valid add_to_cart params", () => {
     const params = { productId: "123e4567-e89b-12d3-a456-426614174000", quantity: 2 };
     const result = guardrail.validateToolParams("add_to_cart", params);

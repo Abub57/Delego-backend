@@ -4,6 +4,7 @@
  */
 
 export type LLMProviderName = "openai" | "anthropic" | "gemini";
+export type LlmProvider = LLMProviderName;
 
 /** @deprecated Use LLMProviderName */
 export type LLMProvider = LLMProviderName;
@@ -66,7 +67,7 @@ export interface LLMCompletionResult {
 // ---------------------------------------------------------------------------
 
 export interface LLMRequestOptions {
-  model: string;
+  model?: string;
   messages: LLMMessage[];
   systemPrompt?: string;
   maxTokens?: number;
@@ -74,6 +75,16 @@ export interface LLMRequestOptions {
   tokenBudget?: number;
   tools?: LLMToolDefinition[];
   stream?: boolean;
+  preferredProvider?: LLMProviderName;
+  fallbackChain?: LLMProviderName[];
+}
+
+export interface LlmRequestOptions {
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  preferredProvider?: LlmProvider;
+  fallbackChain?: LlmProvider[];
 }
 
 export interface LLMResponse {
@@ -103,7 +114,18 @@ export interface LLMClientConfig {
   timeoutMs?: number;
 }
 
+export interface LLMProviderMetrics {
+  provider: LLMProviderName;
+  requests: number;
+  failures: number;
+  errors: number;
+  totalLatencyMs: number;
+  avgLatencyMs: number;
+  errorRate: number;
+}
+
 export interface LLMClient {
   provider: LLMProviderName;
   chat(options: LLMRequestOptions): Promise<LLMResponse>;
+  getMetrics?(): LLMProviderMetrics[];
 }

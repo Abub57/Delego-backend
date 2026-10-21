@@ -7,10 +7,9 @@
  * - Redis caching (60s TTL) with cache invalidation on product updates
  */
 
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Route, RouteHandler } from "@delegolabs/utils";
 import { json, createLogger, route } from "@delegolabs/utils";
-import { type RedisClientType, createClient } from "redis";
+import { Redis } from "ioredis";
 import { encodeCursor, decodeCursor } from "../src/base64Cursor.js";
 import type {
   Product,
@@ -22,18 +21,17 @@ import type {
 const log = createLogger("gateway:storefront", process.env.LOG_LEVEL ?? "info");
 
 // Redis client singleton
-let redisClient: RedisClientType | null = null;
+let redisClient: Redis | null = null;
 
 /**
  * Get or initialize Redis client.
  */
-export function getRedisClient(): RedisClientType {
+export function getRedisClient(): Redis {
   if (!redisClient) {
     const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-    redisClient = createClient({ url: redisUrl });
-    redisClient.on("error", (err) => log.error("Redis client error", { error: err.message }));
+    redisClient = new Redis(redisUrl);
+    redisClient.on("error", (err: Error) => log.error("Redis client error", { error: err.message }));
     redisClient.on("connect", () => log.info("Redis client connected"));
-    redisClient.connect();
   }
   return redisClient;
 }
@@ -93,8 +91,8 @@ export { decodeCursor };
  * Replace with actual database query.
  */
 export async function fetchProducts(
-  merchantId: string,
-  params: StorefrontQueryParams,
+  _merchantId: string,
+  _params: StorefrontQueryParams,
 ): Promise<{ items: Product[]; nextCursor: string | null; totalCount: number }> {
   // This would typically query the products database
   // For now, returning a placeholder structure
@@ -169,7 +167,7 @@ export const listProductsHandler: RouteHandler = async (req, res, params) => {
     const result = await fetchProducts(merchantId, query);
 
     // Cache the result
-    await client.setEx(cacheKey, cacheTTL, JSON.stringify(result));
+    await client.setex(cacheKey, cacheTTL, JSON.stringify(result));
 
     json(res, 200, { data: result, error: null });
   } catch (err) {
@@ -189,7 +187,7 @@ export const listProductsHandler: RouteHandler = async (req, res, params) => {
  *
  * GET /api/v1/merchants/:merchantId/products/:productId
  */
-export const getProductHandler: RouteHandler = async (req, res, params) => {
+export const getProductHandler: RouteHandler = async (_req, res, params) => {
   const { merchantId, productId } = params;
 
   if (!merchantId || !productId) {
@@ -224,7 +222,7 @@ export const getProductHandler: RouteHandler = async (req, res, params) => {
     }
 
     // Cache the result
-    await client.setEx(cacheKey, 60, JSON.stringify(product));
+    await client.setex(cacheKey, 60, JSON.stringify(product));
 
     json(res, 200, { data: product, error: null });
   } catch (err) {

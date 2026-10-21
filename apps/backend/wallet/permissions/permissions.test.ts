@@ -400,6 +400,39 @@ describe("PermissionsService — Soroban permissions contract client", () => {
     });
   });
 
+  describe("revokeBatch()", () => {
+    it("submits multiple revocations sequentially through the contract method", async () => {
+      const secondSpender = Keypair.random().publicKey();
+      const existingGrant = nativeToScVal({
+        delegator: owner,
+        delegate: spender,
+        limit: 5_000_000n,
+        spent: 0n,
+        expiry: 1800000000n,
+      });
+      const secondGrant = nativeToScVal({
+        delegator: owner,
+        delegate: secondSpender,
+        limit: 5_000_000n,
+        spent: 0n,
+        expiry: 1800000000n,
+      });
+      mockRpcServer.simulateTransaction
+        .mockResolvedValueOnce({ result: { retval: existingGrant } })
+        .mockResolvedValueOnce({ result: { retval: secondGrant } });
+      mockSimulator.simulateTransaction
+        .mockResolvedValueOnce(makeSuccessSimulation())
+        .mockResolvedValueOnce(makeSuccessSimulation());
+
+      const service = createService();
+      await service.revokeBatch(contractId, [spender, secondSpender], owner);
+
+      expect(mockSimulator.simulateTransaction).toHaveBeenCalledTimes(2);
+      expect(mockKeySigner.sign).toHaveBeenCalledTimes(2);
+      expect(mockRpcServer.sendTransaction).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe("get()", () => {
     it("returns null when no permission exists on-chain", async () => {
       mockRpcServer.simulateTransaction.mockResolvedValueOnce({

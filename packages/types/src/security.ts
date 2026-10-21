@@ -65,3 +65,11 @@ export interface BugBountyProgram {
   inScopeTargets: string[];
   outOfScopeTargets: string[];
 }
+
+/** Emergency Kill-Switch Broadcast Signal (Issue #375) */
+export interface EmergencyBroadcastSignal {
+  action: "kill_session" | "pause_all_traffic" | "resume";
+  targetId?: string;
+  signedByAdmin: string;
+  timestamp: number;
+}

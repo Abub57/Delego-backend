@@ -132,15 +132,84 @@ exercised only against `ioredis-mock` in unit tests (single-node path);
 the `Cluster` code path itself has not been run against a live cluster
 from this repo.
 
+### 3.1 Read-replica routing
+
+`buildClusterOptions()` in `packages/cache/src/clusterTopology.ts` sets
+`scaleReads` from `REDIS_ENABLE_READ_ONLY_REPLICAS`: `"slave"` when replica
+reads are on (the default), `"master"` when they are off. ioredis then sends
+any command flagged `readonly` to a replica connection and forces every
+other command to the master, so read and write traffic are segregated at the
+protocol level rather than by convention at the call site.
+
+`scaleReads` is derived from the feature flag rather than configured
+separately: the two can disagree, and when they do the setting silently lies
+about where reads actually go (`scaleReads: 'slave'` with no reachable
+replica falls back to the master anyway).
+
+For callers that need more than the flag-level switch,
+`RedisClusterFailoverClient` in `packages/cache/src/clusterFailover.ts`
+(`getClusterFailoverClient()`) provides explicit segregation:
+
+- `read()` walks the replica pool round-robin, retrying the next replica if
+  one errors mid-command, and falls back to a master when none are usable.
+- `write()` only ever selects from the master pool, round-robining across
+  shards.
+- `fallbackToMaster: false` opts a read out of replica reads entirely. Use
+  it for read-after-write paths — a session check issued immediately after a
+  write can otherwise read the pre-write value off a lagging replica.
+- `getRoutingStats()` reports `replicaReads` / `masterReads` /
+  `masterWrites` / `replicaWrites`. `replicaWrites` is always 0; it exists so
+  a routing regression is detectable rather than silently invisible.
+
+### 3.2 Health checking and reconnection
+
+`RedisClusterHealthMonitor` (`packages/cache/src/clusterHealth.ts`) pings
+every master and replica on `REDIS_HEALTH_CHECK_INTERVAL_MS`, marks a node
+unhealthy after `REDIS_HEALTH_CHECK_FAILURE_THRESHOLD` consecutive failures,
+and triggers one reconnect on the healthy → unhealthy transition.
+`RedisClusterFailoverClient` consults that health state, so a replica that
+has failed its check stops attracting reads instead of accumulating
+timeouts. The monitor's timer is `unref`'d, so it never keeps the process
+alive, and `ping` failures are always bounded by
+`REDIS_HEALTH_CHECK_TIMEOUT_MS` so a hung node cannot stall a sweep.
+
+Two ioredis options in `buildClusterOptions()` complete the failover story:
+
+- `clusterNodeRetryStrategy` — ioredis defaults this to `null`, meaning node
+  connections do **not** reconnect on their own and the client relies purely
+  on `MOVED` errors to notice a node returning. A replica that restarts
+  without changing slot ownership (the common case) would stay unusable
+  until something happened to refresh the slot map. Setting this makes every
+  node back off and reconnect like a standalone client.
+- `enableReadyCheck` + `slotsRefreshInterval` — hold commands until
+  `CLUSTER INFO` reports the cluster is ready, and keep the slot map fresh so
+  post-failover role changes are picked up promptly.
+
+Master *promotion* is Redis' own job and reaches the client as a changed
+`CLUSTER SLOTS` map; neither the client nor the monitor performs failover.
+
 Environment variables consumed by `clusterConfigFromEnv()`:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `REDIS_CLUSTER_NODES` | `localhost:6379` | Comma-separated seed nodes |
+| `REDIS_CLUSTER_REPLICA_NODES` | _(unset)_ | Comma-separated replica seeds (reporting only) |
+| `REDIS_ENABLE_READ_ONLY_REPLICAS` | `true` | `false` → `scaleReads: 'master'` |
 | `REDIS_MAX_REDIRECTIONS` | `16` | MOVED/ASK redirects before failing |
 | `REDIS_ENABLE_OFFLINE_QUEUE` | `true` | Queue commands while reconnecting |
 | `REDIS_CONNECT_TIMEOUT_MS` | `10000` | Per-node connect timeout |
 | `REDIS_COMMAND_TIMEOUT_MS` | `5000` | Per-command timeout |
+| `REDIS_HEALTH_CHECK_INTERVAL_MS` | `5000` | Health-check ping interval |
+| `REDIS_HEALTH_CHECK_TIMEOUT_MS` | `2000` | Per-ping timeout |
+| `REDIS_HEALTH_CHECK_FAILURE_THRESHOLD` | `3` | Failures before unhealthy |
+| `REDIS_SLOTS_REFRESH_INTERVAL_MS` | `5000` | `CLUSTER SLOTS` refresh interval |
+| `REDIS_PASSWORD` | _(unset)_ | `AUTH` password for every node |
+
+Read/write segregation is covered by unit tests in
+`packages/cache/src/clusterFailover.test.ts` (routing counts against a fake
+node pool) and `packages/cache/src/clientCluster.test.ts` (the options the
+`Cluster` instance is actually constructed with). Neither exercises a live
+cluster.
 
 ## 4. Cache warming
 

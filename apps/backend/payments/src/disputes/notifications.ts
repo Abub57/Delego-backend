@@ -23,6 +23,7 @@ export type DisputeEventType =
   | "dispute_decided"
   | "dispute_resolved"
   | "dispute_sla_breached"
+  | "dispute_escalated"
   | "partial_refund_executed";
 
 export interface DisputeEventPayload {

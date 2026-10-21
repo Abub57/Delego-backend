@@ -6,7 +6,8 @@
 # Expected Secrets (create before applying):
 #   delego-db      → database-url
 #   delego-redis   → url
-#   delego-stellar → soroban-rpc-url
+#   delego-stellar → soroban-rpc-url, escrow-contract-id
+#   delego-service-auth → orchestrator-payments-service-token, payments-wallet-service-token
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

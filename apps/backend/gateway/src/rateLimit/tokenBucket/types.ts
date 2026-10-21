@@ -1,11 +1,11 @@
 /**
  * Token Bucket Rate Limiting with Tiers (Issue #51).
  *
- * Lives alongside the legacy fixed-window limiter (`../rateLimiter.ts`) —
- * this is the tiered, burst-aware engine that actually backs the gateway's
- * `rateLimitMiddleware`. The legacy module stays in place only for its own
- * admin-analytics dashboard (`../analytics.ts`), which reads a different
- * Redis key scheme.
+ * Lives alongside the legacy fixed-window limiter (`../rateLimiter.ts`).
+ * Since issue #309 the gateway's `rateLimitMiddleware` enforces tenant tiers
+ * with the Redis sliding-window engine in `../tenantRateLimiter.ts`; this
+ * token-bucket engine remains as the source of the endpoint overrides and the
+ * in-process tiered metrics the admin dashboard reads.
  */
 
 export type RateLimitTier = "free" | "pro" | "enterprise" | "internal";

@@ -15,15 +15,104 @@ function getLog(): Logger {
   return log;
 }
 
+/**
+ * Pool-sizing knobs for the CDC service's Postgres pool (Issue #335).
+ * Mirrors the `pg.Pool` options we actually enforce, plus `maxWaitingClients`
+ * — a soft cap `pg.Pool` has no native equivalent for, enforced ourselves via
+ * {@link isPoolSaturated} so a bulk ledger-sync spike fails fast with a clear
+ * backpressure error instead of queuing unboundedly against the DB's
+ * connection limit.
+ */
+export interface TenantPoolConfig {
+  maxConnections: number;
+  idleTimeoutMillis: number;
+  connectionTimeoutMillis: number;
+  maxWaitingClients: number;
+}
+
+/** Live snapshot of pool saturation, same shape as `pg.Pool`'s own counters. */
+export interface PoolHealthMetrics {
+  totalCount: number;
+  idleCount: number;
+  waitingCount: number;
+}
+
+export const DEFAULT_CDC_POOL_CONFIG: TenantPoolConfig = {
+  maxConnections: Number(process.env.CDC_DB_POOL_MAX ?? 5),
+  idleTimeoutMillis: Number(process.env.CDC_DB_POOL_IDLE_TIMEOUT_MS ?? 10000),
+  connectionTimeoutMillis: Number(process.env.CDC_DB_POOL_CONNECTION_TIMEOUT_MS ?? 10000),
+  maxWaitingClients: Number(process.env.CDC_DB_POOL_MAX_WAITING ?? 20),
+};
+
+const poolConfigs = new WeakMap<Pool, TenantPoolConfig>();
+
 /** Creates the Postgres pool used by the CDC connector + stores. */
-export function createCdcPool(databaseUrl: string): Pool {
-  return new Pool({
+export function createCdcPool(databaseUrl: string, overrides: Partial<TenantPoolConfig> = {}): Pool {
+  const config: TenantPoolConfig = { ...DEFAULT_CDC_POOL_CONFIG, ...overrides };
+  const pool = new Pool({
     connectionString: databaseUrl,
-    max: Number(process.env.CDC_DB_POOL_MAX ?? 5),
+    max: config.maxConnections,
     min: Number(process.env.CDC_DB_POOL_MIN ?? 1),
-    idleTimeoutMillis: 10000,
-    connectionTimeoutMillis: 10000,
+    idleTimeoutMillis: config.idleTimeoutMillis,
+    connectionTimeoutMillis: config.connectionTimeoutMillis,
   });
+  poolConfigs.set(pool, config);
+  return pool;
+}
+
+/** Reads the current saturation of a CDC pool (bounded connections + queued acquires). */
+export function getPoolHealthMetrics(pool: Pool): PoolHealthMetrics {
+  return {
+    totalCount: pool.totalCount,
+    idleCount: pool.idleCount,
+    waitingCount: pool.waitingCount,
+  };
+}
+
+/** True once the pool is at its connection ceiling or its waiting-client soft cap. */
+export function isPoolSaturated(pool: Pool, config: TenantPoolConfig = poolConfigs.get(pool) ?? DEFAULT_CDC_POOL_CONFIG): boolean {
+  const health = getPoolHealthMetrics(pool);
+  if (health.waitingCount >= config.maxWaitingClients) return true;
+  return health.totalCount >= config.maxConnections && health.idleCount === 0;
+}
+
+/**
+ * Backpressure gate for bulk ingestion (Issue #335). Callers about to issue a
+ * burst of queries (e.g. a CDC backfill page) should await this first so a
+ * ledger-sync spike throttles itself against pool saturation metrics instead
+ * of piling up unpooled/queued acquisitions that starve the rest of the
+ * service. Uses exponential backoff and gives up with a descriptive
+ * "connection acquisition timeout" error rather than hanging forever.
+ */
+export async function waitForPoolCapacity(
+  pool: Pool,
+  options: { config?: TenantPoolConfig; maxWaitMs?: number; log?: Logger } = {}
+): Promise<void> {
+  const config = options.config ?? poolConfigs.get(pool) ?? DEFAULT_CDC_POOL_CONFIG;
+  const maxWaitMs = options.maxWaitMs ?? config.connectionTimeoutMillis * 3;
+  const logger = options.log ?? getLog();
+  const startedAt = Date.now();
+  let delayMs = 50;
+  let attempt = 0;
+
+  while (isPoolSaturated(pool, config)) {
+    attempt++;
+    if (Date.now() - startedAt >= maxWaitMs) {
+      throw new Error(
+        `Connection acquisition timeout: CDC pool saturated for ${maxWaitMs}ms (${JSON.stringify(
+          getPoolHealthMetrics(pool)
+        )})`
+      );
+    }
+    logger.warn("CDC pool saturated, throttling bulk ingestion batch", {
+      attempt,
+      ...getPoolHealthMetrics(pool),
+      maxConnections: config.maxConnections,
+      maxWaitingClients: config.maxWaitingClients,
+    });
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    delayMs = Math.min(delayMs * 2, 2000);
+  }
 }
 
 /**
@@ -35,6 +124,34 @@ export async function ensureCdcSchema(pool: Pool): Promise<void> {
   const logger = getLog();
   logger.info("Ensuring CDC schema exists");
   await pool.query(`
+    -- Issue #366 — Soroban event sync checkpoints (see migration 040)
+    CREATE TABLE IF NOT EXISTS soroban_event_sync_checkpoints (
+      contract_id VARCHAR(255) PRIMARY KEY,
+      last_ledger_sequence INTEGER NOT NULL DEFAULT 0,
+      last_event_id VARCHAR(255) NOT NULL DEFAULT '',
+      synced_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS soroban_processed_events (
+      event_id VARCHAR(255) PRIMARY KEY,
+      contract_id VARCHAR(255) NOT NULL,
+      ledger_sequence INTEGER NOT NULL,
+      published_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    -- Resumable Soroban ingestion event store (see migration 046)
+    CREATE TABLE IF NOT EXISTS soroban_contract_events (
+      event_id VARCHAR(255) PRIMARY KEY,
+      contract_id VARCHAR(255) NOT NULL,
+      ledger_sequence INTEGER NOT NULL,
+      ledger_closed_at TIMESTAMPTZ NOT NULL,
+      tx_hash VARCHAR(64) NOT NULL,
+      topics JSONB NOT NULL DEFAULT '[]',
+      value JSONB NOT NULL DEFAULT '{}',
+      in_successful_contract_call BOOLEAN NOT NULL DEFAULT TRUE,
+      ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_soroban_contract_events_contract_ledger
+      ON soroban_contract_events (contract_id, ledger_sequence, event_id);
     CREATE TABLE IF NOT EXISTS cdc_replication_state (
       slot_name VARCHAR(255) PRIMARY KEY,
       confirmed_flush_lsn TEXT NOT NULL DEFAULT '0/0',

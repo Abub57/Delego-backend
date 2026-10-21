@@ -7,7 +7,12 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { OpenAIClient } from "./openai.js";
 import { AnthropicClient } from "./anthropic.js";
 import { GeminiClient } from "./gemini.js";
-import { createLLMClient, createDefaultLLMClient } from "./factory.js";
+import {
+  createLLMClient,
+  createDefaultLLMClient,
+  createFailoverLLMClient,
+  resolveFallbackChain,
+} from "./factory.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -270,6 +275,92 @@ describe("GeminiClient", () => {
 // Factory
 // ---------------------------------------------------------------------------
 
+describe("LLM failover orchestration", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("falls back to the next provider when the preferred provider returns a 429", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("api.openai.com")) {
+          calls.push("openai");
+          return Promise.resolve({
+            ok: false,
+            status: 429,
+            text: () => Promise.resolve("Too Many Requests"),
+            statusText: "Too Many Requests",
+          });
+        }
+        if (url.includes("api.anthropic.com")) {
+          calls.push("anthropic");
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({
+              content: [{ type: "text", text: "Recovered via Anthropic" }],
+              stop_reason: "end_turn",
+              usage: { input_tokens: 3, output_tokens: 2 },
+            }),
+            statusText: "OK",
+          });
+        }
+        throw new Error(`Unexpected URL: ${url}`);
+      })
+    );
+
+    const client = createFailoverLLMClient({
+      preferredProvider: "openai",
+      fallbackChain: ["openai", "anthropic"],
+      providerConfigs: {
+        openai: { apiKey: "oa-key", maxRetries: 0, baseDelayMs: 0 },
+        anthropic: { apiKey: "ant-key", maxRetries: 0, baseDelayMs: 0 },
+      },
+    });
+
+    const result = await client.chat({
+      model: "gpt-4o",
+      messages: MESSAGES,
+      preferredProvider: "openai",
+      fallbackChain: ["openai", "anthropic"],
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.content).toBe("Recovered via Anthropic");
+    expect(calls).toEqual(["openai", "anthropic"]);
+    expect(client.getMetrics?.().find((m) => m.provider === "openai")?.failures).toBeGreaterThan(0);
+  });
+
+  it("tracks latency and error rate for each provider", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        statusText: "OK",
+      })
+    );
+
+    const client = createFailoverLLMClient({
+      preferredProvider: "openai",
+      fallbackChain: ["openai"],
+      providerConfigs: { openai: { apiKey: "oa-key", maxRetries: 0, baseDelayMs: 0 } },
+    });
+
+    await client.chat({ model: "gpt-4o", messages: MESSAGES });
+
+    const metrics = client.getMetrics?.();
+    expect(metrics).toBeDefined();
+    expect(metrics?.[0]?.requests).toBe(1);
+    expect(metrics?.[0]?.avgLatencyMs).toBeGreaterThanOrEqual(0);
+    expect(metrics?.[0]?.errorRate).toBe(0);
+  });
+});
+
 describe("createLLMClient", () => {
   it("creates an OpenAI client when provider is openai", () => {
     const client = createLLMClient("openai", { apiKey: "sk-test" });
@@ -307,5 +398,10 @@ describe("createLLMClient", () => {
     } finally {
       process.env["OPENAI_API_KEY"] = original;
     }
+  });
+
+  it("resolves a default fallback chain in provider preference order", () => {
+    expect(resolveFallbackChain("openai", ["openai", "anthropic"])) .toEqual(["openai", "anthropic"]);
+    expect(resolveFallbackChain("anthropic")).toEqual(["anthropic", "openai", "gemini"]);
   });
 });

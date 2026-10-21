@@ -189,6 +189,39 @@ export class ServiceMetricsRegistry {
     httpErrorsTotal: this.counter("http_errors_total"),
   };
 
+  private readonly contractLatencies = new Map<string, number[]>();
+
+  recordContractLatency(metric: { contract: string; functionName: string; durationMs: number; success: boolean }): void {
+    const labelSet = {
+      contract: metric.contract,
+      function: metric.functionName,
+      success: String(metric.success)
+    };
+    
+    this.histogram("contract_invocation_latency_ms").observe(metric.durationMs, labelSet);
+
+    const key = labelKey(labelSet);
+    let arr = this.contractLatencies.get(key);
+    if (!arr) {
+      arr = [];
+      this.contractLatencies.set(key, arr);
+    }
+    arr.push(metric.durationMs);
+    
+    if (arr.length > 1000) {
+      arr.shift();
+    }
+    
+    const sorted = [...arr].sort((a, b) => a - b);
+    const p50 = sorted[Math.floor(sorted.length * 0.5)] ?? 0;
+    const p95 = sorted[Math.floor(sorted.length * 0.95)] ?? 0;
+    const p99 = sorted[Math.floor(sorted.length * 0.99)] ?? 0;
+
+    this.gauge("contract_invocation_latency_p50_ms").set(p50, labelSet);
+    this.gauge("contract_invocation_latency_p95_ms").set(p95, labelSet);
+    this.gauge("contract_invocation_latency_p99_ms").set(p99, labelSet);
+  }
+
   counter(name: string): Counter {
     let existing = this.counters.get(name);
     if (!existing) {

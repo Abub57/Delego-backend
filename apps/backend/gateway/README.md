@@ -9,6 +9,27 @@ pnpm --filter @delegolabs/gateway dev
 ```
 Health check: `GET http://localhost:3000/health`
 
+## Error Tracking (Sentry)
+
+The gateway reports unhandled errors to [Sentry](https://sentry.io) when
+`SENTRY_DSN` is set. When it is unset, the SDK is never initialised and the
+gateway behaves exactly as before (it logs `Sentry disabled` at startup).
+
+| Env var                     | Default     | Notes                                                    |
+| --------------------------- | ----------- | -------------------------------------------------------- |
+| `SENTRY_DSN`                | _(unset)_   | Project DSN. Enables Sentry. Never commit a real value.  |
+| `SENTRY_ENVIRONMENT`        | `NODE_ENV`  | Environment shown in Sentry (e.g. `staging`).            |
+| `SENTRY_TRACES_SAMPLE_RATE` | `0`         | Performance tracing sample rate, `0`–`1`. `0` = errors only. |
+
+- Sentry is initialised from `src/instrument.ts`, which must remain the first
+  import in `src/index.ts`.
+- Errors thrown by route handlers or middleware (or passed to `next(err)`) are
+  captured, then handed back to the router so the existing error responses are
+  unchanged (`src/observability/sentryRequest.ts`).
+- Each event is tagged with `request_id` and `http_method`, and carries
+  `user.id` when the request is authenticated. No other user data, headers,
+  cookies, query strings or bodies are sent.
+
 ## JWT Validation
 
 Access and refresh tokens are validated with [`jsonwebtoken`](https://www.npmjs.com/package/jsonwebtoken).

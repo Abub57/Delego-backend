@@ -6,6 +6,13 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   test: {
+    coverage: {
+      provider: 'v8',
+      statements: 85,
+      branches: 85,
+      functions: 85,
+      lines: 85,
+    },
     environment: "node",
   },
   resolve: {
@@ -14,3 +21,4 @@ export default defineConfig({
     },
   },
 });
+
