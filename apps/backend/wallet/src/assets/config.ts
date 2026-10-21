@@ -5,16 +5,29 @@
  */
 import { Networks } from "@stellar/stellar-sdk";
 import type { StellarNetwork } from "@delegolabs/types";
+import { isMockModeEnabled } from "../../stellar/mockHorizon.js";
 
 export interface StellarConfig {
   network: StellarNetwork;
   horizonUrl: string;
   rpcUrl: string;
   networkPassphrase: string;
+  mockMode?: boolean;
 }
 
 export function getStellarConfig(): StellarConfig {
   const network = (process.env.STELLAR_NETWORK ?? "testnet").toLowerCase() as StellarNetwork;
+
+  // Return mock config early if mock mode is enabled
+  if (isMockModeEnabled()) {
+    return {
+      network: "testnet",
+      horizonUrl: "mock://horizon",
+      rpcUrl: "mock://soroban-rpc",
+      networkPassphrase: Networks.TESTNET,
+      mockMode: true,
+    };
+  }
 
   let horizonUrl = "https://horizon-testnet.stellar.org";
   let rpcUrl = "https://soroban-testnet.stellar.org";
@@ -30,7 +43,7 @@ export function getStellarConfig(): StellarConfig {
     networkPassphrase = Networks.FUTURENET;
   }
 
-  return { network, horizonUrl, rpcUrl, networkPassphrase };
+  return { network, horizonUrl, rpcUrl, networkPassphrase, mockMode: false };
 }
 
 export interface AssetServiceConfig {

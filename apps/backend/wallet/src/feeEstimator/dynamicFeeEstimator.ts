@@ -9,6 +9,7 @@ import type {
   HorizonFeeStatsResponse,
   CachedFeeStatsEntry,
 } from "@delegolabs/types";
+import { createHorizonServer, isMockModeEnabled } from "../stellar/mockHorizon.js";
 
 export const DEFAULT_DYNAMIC_FEE_CONFIG: DynamicFeeEstimatorConfig = {
   maxFeeCapStroops: 100_000, // 0.01 XLM safety cap
@@ -91,7 +92,7 @@ export class DynamicFeeEstimator {
    * Fetch live fee stats from Horizon server.
    */
   async fetchHorizonFeeStats(horizonUrl: string = this.horizonUrl): Promise<HorizonFeeStatsResponse> {
-    const server = new Horizon.Server(horizonUrl);
+    const server = isMockModeEnabled() ? createHorizonServer(horizonUrl) : new Horizon.Server(horizonUrl);
     const stats = (await server.feeStats()) as unknown;
 
     if (!this.isValidFeeStats(stats)) {

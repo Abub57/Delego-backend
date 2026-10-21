@@ -11,6 +11,7 @@ import type { StellarNetwork } from "@delegolabs/types";
 import { vaultService } from "../src/vault.js";
 import { createLogger } from "@delegolabs/utils";
 import { normalizeStellarAddress } from "../src/normalizeStellarAddress.js";
+import { createHorizonServer, isMockModeEnabled } from "./mockHorizon.js";
 
 const log = createLogger("wallet:stellar:recovery", process.env.LOG_LEVEL ?? "info");
 
@@ -132,7 +133,7 @@ export async function mergeAccount(params: MergeAccountParams): Promise<MergeAcc
   const network = resolveNetwork(rawNetwork);
   const passphrase = resolveNetworkPassphrase(network);
   const horizonUrl = getHorizonUrl(network);
-  const server = new Horizon.Server(horizonUrl);
+  const server = createHorizonServer(horizonUrl);
 
   log.info("Starting account merge", {
     source: source.normalized,
@@ -220,7 +221,7 @@ export async function previewMerge(
 
   const network = resolveNetwork(rawNetwork);
   const horizonUrl = getHorizonUrl(network);
-  const server = new Horizon.Server(horizonUrl);
+  const server = createHorizonServer(horizonUrl);
 
   const account = await server.loadAccount(source.normalized);
   const nativeBalanceLine = account.balances.find(

@@ -22,6 +22,7 @@ import { getTransactionFee } from "../dynamicFee.js";
 import { getStellarConfig } from "./config.js";
 import { normalizeStellarAddress } from "../normalizeStellarAddress.js";
 import { validateMemo } from "../../transactions/index.js";
+import { createHorizonServer } from "../../stellar/mockHorizon.js";
 
 const log = createLogger("wallet:assets:submitter", process.env.LOG_LEVEL ?? "info");
 
@@ -80,7 +81,7 @@ export function buildSubmitter(deps: SubmitterDeps = {}): ClassicSubmitter {
       }
 
       const horizonServer =
-        deps.server ?? new Horizon.Server(config.horizonUrl);
+        deps.server ?? createHorizonServer(config.horizonUrl);
 
       const secret = await getSecret(normalized);
       const signer = Keypair.fromSecret(secret);

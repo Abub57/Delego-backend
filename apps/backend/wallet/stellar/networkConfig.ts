@@ -7,6 +7,7 @@ export interface StellarNetworkConfig {
   rpcUrl: string;
   horizonUrl: string;
   networkPassphrase: string;
+  mockMode?: boolean;
 }
 
 const KNOWN_PASSPHRASES = new Map<string, string>([
@@ -16,13 +17,40 @@ const KNOWN_PASSPHRASES = new Map<string, string>([
 ]);
 
 /**
+ * Checks if mock mode is enabled via environment variables.
+ * Mock mode is enabled when NODE_ENV === 'test' or MOCK_HORIZON === 'true'.
+ */
+export function isMockModeEnabled(): boolean {
+  return process.env.NODE_ENV === "test" || process.env.MOCK_HORIZON === "true";
+}
+
+/**
+ * Returns mock network configuration for testing.
+ */
+export function getMockNetworkConfig(): StellarNetworkConfig {
+  return {
+    rpcUrl: "mock://soroban-rpc",
+    horizonUrl: "mock://horizon",
+    networkPassphrase: Networks.TESTNET,
+    mockMode: true,
+  };
+}
+
+/**
  * Validates and resolves the configured Stellar network parameters.
  * Rejects empty or unknown passphrases at startup.
  * Logs selected network without exposing secrets.
+ * Returns mock config when mock mode is enabled.
  */
 export function validateStellarNetworkConfig(
   overrideConfig?: Partial<StellarNetworkConfig>
 ): StellarNetworkConfig {
+  // Return mock config early if mock mode is enabled and not explicitly overridden
+  if (isMockModeEnabled() && !overrideConfig?.horizonUrl && !overrideConfig?.rpcUrl) {
+    log.info("Mock mode enabled - returning mock network configuration");
+    return getMockNetworkConfig();
+  }
+
   const networkEnv = (process.env.STELLAR_NETWORK ?? "testnet").toLowerCase();
 
   let horizonUrl = process.env.STELLAR_HORIZON_URL;
@@ -84,11 +112,15 @@ export function validateStellarNetworkConfig(
     network: selectedNetworkLabel,
     horizonUrl,
     rpcUrl,
+    mockMode: overrideConfig?.mockMode ?? isMockModeEnabled(),
   });
 
   return {
     horizonUrl,
     rpcUrl,
     networkPassphrase: trimmedPassphrase,
+    mockMode: overrideConfig?.mockMode ?? isMockModeEnabled(),
   };
 }
+
+export { Networks } from "@stellar/stellar-sdk";

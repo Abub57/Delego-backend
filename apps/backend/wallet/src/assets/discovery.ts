@@ -27,6 +27,7 @@ import {
   type MetadataResolverDeps,
 } from "./metadata.js";
 import { getRedisConnection } from "../queue/txQueue.js";
+import { createHorizonServer } from "../../stellar/mockHorizon.js";
 
 const log = createLogger("wallet:assets:discovery", process.env.LOG_LEVEL ?? "info");
 
@@ -88,7 +89,7 @@ export async function getAssetFlags(
   }
 
   const config = getStellarConfig();
-  const server = deps.server ?? new Horizon.Server(config.horizonUrl);
+  const server = deps.server ?? createHorizonServer(config.horizonUrl);
   let flags: AssetFlags = emptyFlags();
 
   try {

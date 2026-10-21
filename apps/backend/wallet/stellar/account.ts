@@ -3,6 +3,7 @@ import type { WalletAccount, StellarNetwork } from "@delegolabs/types";
 import { vaultService } from "../src/vault.js";
 import { createLogger } from "@delegolabs/utils";
 import { normalizeStellarAddress } from "../src/normalizeStellarAddress.js";
+import { createHorizonServer, isMockModeEnabled } from "./mockHorizon.js";
 
 const log = createLogger("wallet:stellar:account", process.env.LOG_LEVEL ?? "info");
 
@@ -163,16 +164,18 @@ export const accountService: AccountService = {
         log.warn("Account requested is not managed in local vault", { address: normalized, original });
       }
 
-      // Check if it exists on-chain via Horizon
+      // Check if it exists on-chain via Horizon (or mock)
       const network: StellarNetwork = (process.env.STELLAR_NETWORK as StellarNetwork) ?? "testnet";
       const horizonUrl = getHorizonUrl(network);
-      const server = new Horizon.Server(horizonUrl);
+      const server = createHorizonServer(horizonUrl);
       
       try {
         await server.loadAccount(normalized);
         return { address: normalized, network };
       } catch (err: any) {
-        if (err.response?.status === 404) {
+        // Handle both real Horizon errors and mock errors
+        const isNotFound = err.response?.status === 404 || err.message?.includes("not found");
+        if (isNotFound) {
           log.warn("Account not found on-chain", { address: normalized });
           return null;
         }
@@ -194,8 +197,8 @@ export const accountService: AccountService = {
       // Store securely in VaultService
       await vaultService.storeKey(address, secret);
 
-      // If testnet, fund using Friendbot
-      if (network === "testnet") {
+      // If testnet and not in mock mode, fund using Friendbot
+      if (network === "testnet" && !isMockModeEnabled()) {
         log.info("Funding testnet account via Friendbot...", { address });
         const friendbotUrl = `https://friendbot.stellar.org?addr=${encodeURIComponent(address)}`;
         const res = await fetch(friendbotUrl);
@@ -204,7 +207,7 @@ export const accountService: AccountService = {
           throw new Error(`Friendbot funding failed with status ${res.status}: ${body}`);
         }
         log.info("Account funded successfully via Friendbot", { address });
-      } else if (network === "futurenet") {
+      } else if (network === "futurenet" && !isMockModeEnabled()) {
         log.info("Funding futurenet account via Friendbot...", { address });
         const friendbotUrl = `https://friendbot-futurenet.stellar.org?addr=${encodeURIComponent(address)}`;
         const res = await fetch(friendbotUrl);
@@ -213,6 +216,11 @@ export const accountService: AccountService = {
           throw new Error(`Futurenet Friendbot funding failed with status ${res.status}: ${body}`);
         }
         log.info("Account funded successfully via Futurenet Friendbot", { address });
+      } else if (isMockModeEnabled()) {
+        log.info("Mock mode enabled - skipping Friendbot funding", { address, network });
+        // Pre-configure mock account with test balance
+        const { setMockAccount } = await import("./mockHorizon.js");
+        setMockAccount(address, { balances: [{ asset_type: "native", balance: "10000.0000000" }] });
       } else {
         log.warn("Account generated for mainnet. Please fund it manually.", { address });
       }

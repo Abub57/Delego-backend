@@ -12,6 +12,7 @@
 import { Redis } from "ioredis";
 import { createLogger, type Logger } from "@delegolabs/utils";
 import { Horizon, Asset, TransactionBuilder, Operation, Keypair, Networks } from "@stellar/stellar-sdk";
+import { createHorizonServer, isMockModeEnabled } from "../../stellar/mockHorizon.js";
 
 // ---------------------------------------------------------------------------
 // Types (matching issue spec)
@@ -243,7 +244,7 @@ export class FaucetRelayer {
     }
 
     const issuerKeypair = Keypair.fromSecret(MOCK_USDC_ISSUER);
-    const server = new Horizon.Server(this.horizonUrl);
+    const server = isMockModeEnabled() ? createHorizonServer(this.horizonUrl) : new Horizon.Server(this.horizonUrl);
     const issuerAccount = await server.loadAccount(issuerKeypair.publicKey());
 
     const usdcAsset = new Asset(MOCK_USDC_CODE, issuerKeypair.publicKey());

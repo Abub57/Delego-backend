@@ -23,6 +23,7 @@ import {
 import { discoverAsset, type DiscoveryDeps } from "./discovery.js";
 import { getRedisConnection } from "../queue/txQueue.js";
 import { broadcastBalanceEvent, getSubscriberCount } from "../websocket/server.js";
+import { createHorizonServer } from "../../stellar/mockHorizon.js";
 
 const log = createLogger("wallet:assets:balances", process.env.LOG_LEVEL ?? "info");
 
@@ -99,7 +100,7 @@ export async function getAccountBalances(
   deps: BalancesDeps = {},
 ): Promise<AccountAssetsResult> {
   const config = getStellarConfig();
-  const server = deps.server ?? new Horizon.Server(config.horizonUrl);
+  const server = deps.server ?? createHorizonServer(config.horizonUrl);
   const account = await server.loadAccount(address);
 
   const rawBalances = (account.balances ?? []) as HorizonBalance[];

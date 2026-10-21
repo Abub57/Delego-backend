@@ -13,6 +13,7 @@ import type { AssetMetadata } from "@delegolabs/types";
 import { readAssetServiceConfig } from "./config.js";
 import { assetKey, isNativeCode } from "./utils.js";
 import { getRedisConnection } from "../queue/txQueue.js";
+import { createHorizonServer, getHorizonUrl } from "../../stellar/mockHorizon.js";
 
 const log = createLogger("wallet:assets:metadata", process.env.LOG_LEVEL ?? "info");
 
@@ -49,7 +50,7 @@ export async function getIssuerHomeDomain(
   deps: MetadataResolverDeps = {},
 ): Promise<string | null> {
   const { horizonUrl } = getHorizonUrl();
-  const server = deps.server ?? new Horizon.Server(horizonUrl);
+  const server = deps.server ?? createHorizonServer(horizonUrl);
   try {
     const account = await server.accounts().accountId(issuer).call();
     const homeDomain = (account as unknown as { home_domain?: string }).home_domain;
@@ -64,11 +65,7 @@ export async function getIssuerHomeDomain(
 }
 
 function getHorizonUrl(): { horizonUrl: string } {
-  const network = (process.env.STELLAR_NETWORK ?? "testnet").toLowerCase();
-  const horizonUrl =
-    network === "mainnet"
-      ? (process.env.STELLAR_HORIZON_URL ?? "https://horizon.stellar.org")
-      : (process.env.STELLAR_HORIZON_URL ?? "https://horizon-testnet.stellar.org");
+  const { horizonUrl } = getStellarConfig();
   return { horizonUrl };
 }
 
@@ -121,7 +118,7 @@ export async function resolveSep1Metadata(
   deps: MetadataResolverDeps = {},
 ): Promise<AssetMetadata | null> {
   const { horizonUrl } = getHorizonUrl();
-  const server = deps.server ?? new Horizon.Server(horizonUrl);
+  const server = deps.server ?? createHorizonServer(horizonUrl);
   const homeDomain = await getIssuerHomeDomain(issuer, { server });
   if (!homeDomain) return null;
 

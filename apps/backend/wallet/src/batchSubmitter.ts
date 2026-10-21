@@ -2,6 +2,7 @@ import { Operation, TransactionBuilder, Keypair, Networks, Address, nativeToScVa
 import type { TransactionRequest, TransactionResult } from "@delegolabs/types";
 import { vaultService } from "./vault.js";
 import { createLogger, withSpan } from "@delegolabs/utils";
+import { createHorizonServer, isMockModeEnabled } from "../stellar/mockHorizon.js";
 
 const log = createLogger("wallet:batchSubmitter", process.env.LOG_LEVEL ?? "info");
 
@@ -117,9 +118,8 @@ export async function submitTransactionBatch(
   const secret = await vaultService.getKey(sourceAddress);
   const signerKeypair = Keypair.fromSecret(secret);
 
-  const { Horizon, rpc } = await import("@stellar/stellar-sdk");
   const horizonUrl = process.env.STELLAR_HORIZON_URL ?? "https://horizon-testnet.stellar.org";
-  const server = new Horizon.Server(horizonUrl);
+  const server = isMockModeEnabled() ? createHorizonServer(horizonUrl) : new (await import("@stellar/stellar-sdk")).Horizon.Server(horizonUrl);
   const account = await server.loadAccount(sourceAddress);
 
   let builder = new TransactionBuilder(account, {

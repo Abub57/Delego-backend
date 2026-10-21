@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Networks } from "@stellar/stellar-sdk";
-import { validateStellarNetworkConfig } from "./networkConfig.js";
+import { validateStellarNetworkConfig, isMockModeEnabled, getMockNetworkConfig } from "./networkConfig.js";
 
 describe("Stellar Network Passphrase Validation (Issue #120)", () => {
   const origEnv = { ...process.env };
@@ -11,6 +11,8 @@ describe("Stellar Network Passphrase Validation (Issue #120)", () => {
     delete process.env.STELLAR_HORIZON_URL;
     delete process.env.STELLAR_RPC_URL;
     delete process.env.ALLOW_CUSTOM_PASSPHRASE;
+    delete process.env.MOCK_HORIZON;
+    delete process.env.NODE_ENV;
   });
 
   afterEach(() => {
@@ -63,5 +65,73 @@ describe("Stellar Network Passphrase Validation (Issue #120)", () => {
     expect(() =>
       validateStellarNetworkConfig({ networkPassphrase: "Some Random Unknown Passphrase" })
     ).toThrow("Unknown Stellar network passphrase");
+  });
+});
+
+describe("Mock Mode Support (Issue #560)", () => {
+  const origEnv = { ...process.env };
+
+  beforeEach(() => {
+    delete process.env.MOCK_HORIZON;
+    delete process.env.NODE_ENV;
+  });
+
+  afterEach(() => {
+    process.env = { ...origEnv };
+  });
+
+  it("isMockModeEnabled returns true when NODE_ENV === 'test'", () => {
+    process.env.NODE_ENV = "test";
+    expect(isMockModeEnabled()).toBe(true);
+  });
+
+  it("isMockModeEnabled returns true when MOCK_HORIZON === 'true'", () => {
+    process.env.NODE_ENV = "production";
+    process.env.MOCK_HORIZON = "true";
+    expect(isMockModeEnabled()).toBe(true);
+  });
+
+  it("isMockModeEnabled returns false when neither flag is set", () => {
+    process.env.NODE_ENV = "production";
+    expect(isMockModeEnabled()).toBe(false);
+  });
+
+  it("validateStellarNetworkConfig returns mock config when NODE_ENV === 'test'", () => {
+    process.env.NODE_ENV = "test";
+    const config = validateStellarNetworkConfig();
+
+    expect(config.mockMode).toBe(true);
+    expect(config.horizonUrl).toBe("mock://horizon");
+    expect(config.rpcUrl).toBe("mock://soroban-rpc");
+    expect(config.networkPassphrase).toBe(Networks.TESTNET);
+  });
+
+  it("validateStellarNetworkConfig returns mock config when MOCK_HORIZON === 'true'", () => {
+    process.env.MOCK_HORIZON = "true";
+    const config = validateStellarNetworkConfig();
+
+    expect(config.mockMode).toBe(true);
+    expect(config.horizonUrl).toBe("mock://horizon");
+    expect(config.rpcUrl).toBe("mock://soroban-rpc");
+  });
+
+  it("getMockNetworkConfig returns correct mock configuration", () => {
+    const config = getMockNetworkConfig();
+
+    expect(config.horizonUrl).toBe("mock://horizon");
+    expect(config.rpcUrl).toBe("mock://soroban-rpc");
+    expect(config.networkPassphrase).toBe(Networks.TESTNET);
+    expect(config.mockMode).toBe(true);
+  });
+
+  it("explicit override takes precedence over mock mode", () => {
+    process.env.NODE_ENV = "test";
+    const config = validateStellarNetworkConfig({
+      horizonUrl: "https://custom-horizon.example.com",
+      rpcUrl: "https://custom-rpc.example.com",
+    });
+
+    expect(config.horizonUrl).toBe("https://custom-horizon.example.com");
+    expect(config.rpcUrl).toBe("https://custom-rpc.example.com");
   });
 });

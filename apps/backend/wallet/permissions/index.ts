@@ -27,6 +27,7 @@ import {
 } from "../src/vault.js";
 import { checkSpendLimit } from "../src/spendLimits.js";
 import { getTransactionFee } from "../src/dynamicFee.js";
+import { createHorizonServer, isMockModeEnabled } from "../stellar/mockHorizon.js";
 
 const log = createLogger("wallet:permissions", process.env.LOG_LEVEL ?? "info");
 
@@ -171,6 +172,15 @@ function resolveStellarConfig(overrides?: Partial<PermissionsServiceDeps>): {
   rpcUrl: string;
   networkPassphrase: string;
 } {
+  // Return mock config early if mock mode is enabled and not explicitly overridden
+  if (isMockModeEnabled() && !overrides?.horizonUrl && !overrides?.rpcUrl) {
+    return {
+      horizonUrl: "mock://horizon",
+      rpcUrl: "mock://soroban-rpc",
+      networkPassphrase: Networks.TESTNET,
+    };
+  }
+
   const network = (process.env.STELLAR_NETWORK ?? "testnet").toLowerCase();
   let horizonUrl = "https://horizon-testnet.stellar.org";
   let rpcUrl = "https://soroban-testnet.stellar.org";
@@ -272,7 +282,7 @@ export function createPermissionsService(
   const rpcServer =
     deps.rpcServer ?? new rpc.Server(config.rpcUrl, { timeout: 30_000 });
   const horizonServer =
-    deps.horizonServer ?? new Horizon.Server(config.horizonUrl);
+    deps.horizonServer ?? createHorizonServer(config.horizonUrl);
 
   const simulatorConfig: SorobanRpcConfig = {
     ...readSorobanRpcConfig(),
