@@ -1,4 +1,11 @@
-export { calculatePayout, initiatePayout } from "./service.js";
+export { calculatePayout, initiatePayout, type PayoutServiceDeps } from "./service.js";
+export {
+  PayoutOrchestrator,
+  createPayoutOrchestrator,
+  type PayoutOrchestratorDeps,
+  type MerchantNotificationPayload,
+  type BatchPayoutOrchestrationResult,
+} from "./orchestrator.js";
 export {
   createPayoutRecord,
   getPayoutRecordById,
@@ -12,5 +19,7 @@ export type {
   InitiatePayoutResponse,
   PayoutRecord,
   PlatformCommissionConfig,
+  TrustlineSetupInstructions,
 } from "./types.js";
 export { validateInitiatePayoutRequest } from "./validation.js";
+

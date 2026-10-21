@@ -106,6 +106,20 @@ export interface TrustlineAuthRequest {
   clawbackEnabled?: boolean;
 }
 
+/**
+ * Result of a pre-flight trustline verification check — Issue #594.
+ */
+export interface TrustlineCheckResult {
+  account: string;
+  assetCode: string;
+  assetIssuer: string;
+  trustlineEstablished: boolean;
+  authorized: boolean;
+  currentBalance: string;
+  creditLimit: string;
+}
+
+
 export interface AssetTransferRequest {
   sourceAddress: string;
   destination: string;

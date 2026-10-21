@@ -1,6 +1,6 @@
 import { createLogger } from "@delegolabs/utils";
-import { v4 as uuidv4 } from "uuid";
-import type { InitiatePayoutResponse, PayoutRecord } from "./types.js";
+import { randomUUID } from "node:crypto";
+import type { InitiatePayoutResponse, PayoutRecord, PayoutCalculation } from "./types.js";
 
 const log = createLogger("payments:payouts-store", process.env.LOG_LEVEL ?? "info");
 
@@ -11,8 +11,14 @@ const payoutStore = new Map<string, PayoutRecord>();
 /**
  * Creates a new payout record
  */
-export async function createPayoutRecord(calculation: PayoutCalculation, transactionHash: string, ledger: number): Promise<PayoutRecord> {
-  const payoutId = uuidv4();
+export async function createPayoutRecord(
+  calculation: PayoutCalculation,
+  transactionHash: string | null,
+  ledger: number | null,
+  status: PayoutRecord["status"] = "confirmed",
+  pausedReason?: string
+): Promise<PayoutRecord> {
+  const payoutId = randomUUID();
   const record: PayoutRecord = {
     id: payoutId,
     payoutId,
@@ -24,7 +30,8 @@ export async function createPayoutRecord(calculation: PayoutCalculation, transac
     netMerchantPayoutStroops: calculation.netMerchantPayoutStroops.toString(),
     transactionHash,
     ledger,
-    status: "confirmed",
+    status,
+    pausedReason: pausedReason ?? null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -34,6 +41,7 @@ export async function createPayoutRecord(calculation: PayoutCalculation, transac
     payoutId,
     escrowId: calculation.escrowId,
     transactionHash,
+    status,
   });
 
   return record;
@@ -86,16 +94,22 @@ export async function updatePayoutRecordStatus(payoutId: string, status: PayoutR
 /**
  * Converts a payout record to response format
  */
-export function toPayoutResponse(record: PayoutRecord): InitiatePayoutResponse {
+export function toPayoutResponse(
+  record: PayoutRecord,
+  extras?: Partial<InitiatePayoutResponse>
+): InitiatePayoutResponse {
   return {
     payoutId: record.payoutId,
     escrowId: record.escrowId,
     grossAmountStroops: BigInt(record.grossAmountStroops),
     platformFeeStroops: BigInt(record.platformFeeStroops),
     netMerchantPayoutStroops: BigInt(record.netMerchantPayoutStroops),
-    transactionHash: record.transactionHash,
+    transactionHash: record.transactionHash ?? "",
     ledger: record.ledger ?? 0,
-    status: record.status === "confirmed" || record.status === "submitted" ? record.status : "submitted",
+    status: record.status,
     paidAt: record.createdAt.toISOString(),
+    ...(record.pausedReason ? { pausedReason: record.pausedReason } : {}),
+    ...extras,
   };
 }
+
