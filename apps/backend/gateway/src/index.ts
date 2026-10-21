@@ -84,6 +84,9 @@ const server = startHttpServer({
     // Version negotiation must run before auth and rate-limiting so that
     // sunset versions get 410 Gone before any further processing.
     versionNegotiationMiddleware(),
+    // Version negotiation must run before auth and rate-limiting so that
+    // sunset versions get 410 Gone before any further processing.
+    versionNegotiationMiddleware(),
     // Buffers courier webhook bodies before any middleware drains the stream (Issue #577).
     courierWebhookBodyCapture(),
     bodyLimitMiddleware(),
