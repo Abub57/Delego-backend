@@ -1,4 +1,4 @@
-/**
+/*
  * DatabaseVacuumService — the worker body for issue #382.
  *
  * One pass does four things, in order:
@@ -13,7 +13,7 @@
 import { createLogger, type Logger } from "@delegolabs/utils";
 import type {
   BloatAlert,
-  BloatAssessment,
+  BloatASsessment,
   TableBloatStats,
   VacuumMetrics,
   VacuumRunSummary,
@@ -141,13 +141,13 @@ export class DatabaseVacuumService {
   }
 
   /** Scans and classifies without vacuuming or alerting. */
-  async scan(): Promise<BloatAssessment[]> {
+  async scan(): Promise<BloatASsessment[]> {
     const stats = await this.scanner.scan();
     return assessTables(stats, { thresholds: this.thresholds });
   }
 
   /** Assessments from the most recent `runOnce()`, or `[]` before the first. */
-  assessments(): readonly BloatAssessment[] {
+  assessments(): readonly BloatASsessment[] {
     return this.lastAssessments;
   }
 
@@ -320,7 +320,7 @@ export class DatabaseVacuumService {
   }
 
   private async skipReason(
-    assessment: BloatAssessment,
+    assessment: BloatASsessment,
     target: VacuumTarget,
   ): Promise<string | null> {
     if (this.skipAutovacuumDisabled && !assessment.stats.autovacuumEnabled) {

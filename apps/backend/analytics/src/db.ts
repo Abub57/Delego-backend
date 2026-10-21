@@ -20,6 +20,52 @@ export const sequelize = new Sequelize(databaseUrl, {
   },
 });
 
+export interface MerchantDailyGmvRow {
+  bucket_day: Date;
+  merchant_id: string;
+  currency: string;
+  total_orders: number;
+  gross_volume_stroops: string;
+  total_platform_fees_stroops: string;
+  disputed_orders_count: number;
+}
+
+export interface MerchantDailyGmvQuery {
+  merchantId: string;
+  currency?: string;
+  startDate: Date;
+  endDate: Date;
+}
+
+/**
+ * Query the merchant_daily_gmv_summary continuous aggregate.
+ * Returns per-day GMV, fee, and order aggregates for a merchant.
+ */
+export async function getMerchantDailyGmv(query: MerchantDailyGmvQuery): Promise<MerchantDailyGmvRow[]> {
+  const conditions = ["merchant_id = :merchantId", "bucket_day >= :startDate", "bucket_day < :endDate"];
+  const replacements: Record<string, unknown> = {
+    merchantId: query.merchantId,
+    startDate: query.startDate,
+    endDate: query.endDate,
+  };
+
+  if (query.currency) {
+    conditions.push("currency = :currency");
+    replacements.currency = query.currency;
+  }
+
+  const [rows] = await sequelize.query(
+    `SELECT bucket_day, merchant_id, currency, total_orders,
+            gross_volume_stroops, total_platform_fees_stroops, disputed_orders_count
+       FROM merchant_daily_gmv_summary
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY bucket_day ASC`,
+    { replacements, raw: true }
+  );
+
+  return rows as MerchantDailyGmvRow[];
+}
+
 export async function connectDb(): Promise<void> {
   try {
     await sequelize.authenticate();
