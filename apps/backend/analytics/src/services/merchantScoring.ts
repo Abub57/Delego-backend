@@ -1,5 +1,5 @@
-/**
- * #392 — Merchant Reputation Weight Calculator: scoring model.
+/*
+ * #392 -- Merchant Reputation Weight Calculator: scoring model.
  *
  * Pure, side-effect-free statistics so the scoring logic can be unit
  * tested without a database or Redis. Everything that talks to Postgres

@@ -6,6 +6,14 @@ import { validateSchema, CreateMerchantSchema, UpdateMerchantSchema } from "../.
 import { readJsonBody, InvalidJsonError, BodyTooLargeError } from "../../src/request.js";
 import { badRequest, notFound, unauthorized, sendApiError } from "../../src/errors.js";
 import { Merchant } from "../../src/models/index.js";
+import {
+  isValidCountryCode,
+  normalizePostalCode,
+  compileDeliveryZones,
+  findMatchingZone,
+  buildDeliveryZoneResponse,
+  type DeliveryZone,
+} from "./deliveryZones.js";
 
 const log = createLogger("gateway:merchant", process.env.LOG_LEVEL ?? "info");
 
@@ -23,6 +31,30 @@ function formatMerchantResponse(merchant: Merchant): Record<string, unknown> {
     createdAt: merchant.createdAt.toISOString(),
     updatedAt: merchant.updatedAt.toISOString(),
   };
+}
+
+/**
+ * Delivery zones configured for a merchant. This is the source of truth for
+ * the delivery-zones endpoint. Zones are keyed by merchant id and are
+ * precompiled on first use so matching stays well within the 20 ms budget.
+ */
+const deliveryZonesByMerchant = new Map<string, DeliveryZone[]>();
+const compiledZonesByMerchant = new Map<string, ReturnType<typeof compileDeliveryZones>>();
+
+/* * Register the delivery zones for a merchant (used by seeding / admin tooling). */
+export function setMerchantDeliveryZones(merchantId: string, zones: DeliveryZone[]): void {
+  deliveryZonesByMerchant.set(merchantId, zones);
+  compiledZonesByMerchant.set(merchantId, compileDeliveryZones(zones));
+}
+
+function getCompiledZones(merchantId: string) {
+  let compiled = compiledZonesByMerchant.get(merchantId);
+  if (!compiled) {
+    const zones = deliveryZonesByMerchant.get(merchantId) ?? [];
+    compiled = compileDeliveryZones(zones);
+    compiledZonesByMerchant.set(merchantId, compiled);
+  }
+  return compiled;
 }
 
 export async function createMerchantHandler(
@@ -185,10 +217,72 @@ export async function updateCurrentMerchantHandler(
   }
 }
 
+/**
+ * GET /api/v1/merchants/:id/delivery-zones
+ *
+ * Verifies whether a buyer's destination postal code is covered by the
+ * merchant's delivery service. Returns 400 for invalid ISO-3166 country codes.
+ */
+export async function getDeliveryZonesHandler(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  try {
+    const url = new URL(req.url ?? "", "http://localhost");
+    const segments = url.pathname.split("/").filter(Boolean);
+    // ["api", "v1", "merchants", ":id", "delivery-zones"]
+    const merchantId = segments[3];
+    if (!merchantId) {
+      badRequest(res, "Merchant id is required", req);
+      return;
+    }
+
+    const countryCode = url.searchParams.get("countryCode") ?? "";
+    const postalCode = url.searchParams.get("postalCode") ?? "";
+
+    if (!countryCode) {
+      badRequest(res, "Query parameter 'countryCode' is required", req);
+      return;
+    }
+    if (!isValidCountryCode(countryCode)) {
+      badRequest(res, "Invalid ISO-3166 country code", req);
+      return;
+    }
+    if (!normalizePostalCode(postalCode)) {
+      badRequest(res, "Query parameter 'postalCode' is required", req);
+      return;
+    }
+
+    const merchant = await Merchant.findByPk(merchantId);
+    if (!merchant) {
+      notFound(res, "Merchant not found", req);
+      return;
+    }
+
+    const compiledZones = getCompiledZones(merchantId);
+    const matched = findMatchingZone(compiledZones, countryCode, postalCode);
+
+    const response = buildDeliveryZoneResponse(merchantId, matched);
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      data: response,
+      error: null,
+    }));
+  } catch (err: any) {
+    log.error("Failed to resolve delivery zones", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    sendApiError(res, 500, "DELIVERY_ZONES_FAILED",
+      err instanceof Error ? err.message : "Failed to resolve delivery zones", req);
+  }
+}
+
 export function registerMerchantRoutes(): Route[] {
   return [
     route("POST", "/api/v1/merchants", createMerchantHandler),
     route("GET", "/api/v1/merchants/me", getCurrentMerchantHandler),
     route("PUT", "/api/v1/merchants/me", updateCurrentMerchantHandler),
+    route("GET", "/api/v1/merchants/:id/delivery-zones", getDeliveryZonesHandler),
   ];
 }
