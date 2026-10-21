@@ -19,6 +19,19 @@ export interface PayoutCalculation {
   merchantAddress: string;
 }
 
+import type { TrustlineCheckResult } from "@delegolabs/types";
+
+export interface TrustlineSetupInstructions {
+  account: string;
+  assetCode: string;
+  assetIssuer: string;
+  limit: string;
+  recommendedAction: "ESTABLISH_TRUSTLINE" | "REQUEST_AUTHORIZATION";
+  instructions: string;
+  steps: string[];
+  stellarLaboratoryUrl: string;
+}
+
 /**
  * Request to trigger payout
  */
@@ -26,6 +39,8 @@ export interface InitiatePayoutRequest {
   escrowId: string;
   merchantAddress: string;
   sourceAddress: string;
+  assetCode?: string;
+  assetIssuer?: string;
 }
 
 /**
@@ -39,8 +54,11 @@ export interface InitiatePayoutResponse {
   netMerchantPayoutStroops: bigint;
   transactionHash: string;
   ledger: number;
-  status: "submitted" | "confirmed";
+  status: "submitted" | "confirmed" | "paused" | "pending" | "failed";
   paidAt: string;
+  pausedReason?: string;
+  trustlineCheck?: TrustlineCheckResult;
+  instructions?: TrustlineSetupInstructions;
 }
 
 /**
@@ -57,7 +75,9 @@ export interface PayoutRecord {
   netMerchantPayoutStroops: string;
   transactionHash: string | null;
   ledger: number | null;
-  status: "pending" | "submitted" | "confirmed" | "failed";
+  status: "pending" | "submitted" | "confirmed" | "failed" | "paused";
+  pausedReason?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
+

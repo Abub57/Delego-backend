@@ -216,3 +216,7 @@ export type {
 export { DlqTriageWorker } from "./queue/dlqTriageWorker.js";
 export { DlqSlackAlerter } from "./queue/dlqSlackAlerter.js";
 export { classifyErrorAndDecide, calculateExponentialBackoff } from "./queue/dlqClassificationEngine.js";
+
+// Export Stellar trustline pre-flight utilities (Issue #594)
+export * from "./stellar/trustlines.js";
+

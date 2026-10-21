@@ -16,12 +16,17 @@ export function validateInitiatePayoutRequest(
   const sourceAddress = requireStellarAddress(body, "sourceAddress");
   if (!sourceAddress.ok) return sourceAddress;
 
+  const assetCode = typeof body.assetCode === "string" ? body.assetCode.trim() : undefined;
+  const assetIssuer = typeof body.assetIssuer === "string" ? body.assetIssuer.trim() : undefined;
+
   return {
     ok: true,
     value: {
       escrowId: escrowId.value.trim(),
       merchantAddress: merchantAddress.value.trim(),
       sourceAddress: sourceAddress.value.trim(),
+      ...(assetCode ? { assetCode } : {}),
+      ...(assetIssuer ? { assetIssuer } : {}),
     },
   };
 }
