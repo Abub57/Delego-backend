@@ -7,6 +7,7 @@ import { sentryConfig } from "./instrument.js";
 import { createLogger, initTelemetry, startHttpServer, corsMiddleware, securityHeadersMiddleware, ServiceMetricsRegistry } from "@delegolabs/utils";
 import { registerRoutes } from "../routes/index.js";
 import { bodyLimitMiddleware } from "../routes/api-v1.js";
+import { courierWebhookBodyCapture } from "../routes/webhookBody.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import { requestIdMiddleware } from "../middleware/requestId.js";
@@ -83,6 +84,8 @@ const server = startHttpServer({
     // Version negotiation must run before auth and rate-limiting so that
     // sunset versions get 410 Gone before any further processing.
     versionNegotiationMiddleware(),
+    // Buffers courier webhook bodies before any middleware drains the stream (Issue #577).
+    courierWebhookBodyCapture(),
     bodyLimitMiddleware(),
     // OpenAPI request validation - validates path, query, and body parameters
     validateRequest(),

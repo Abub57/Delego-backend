@@ -122,6 +122,7 @@ import { registerDeliveryEvidenceRoutes } from "../src/catalog/deliveryEvidence.
 import { registerWaitlistRoutes } from "../src/waitlist/routes.js";
 import { registerBulkCatalogImportRoutes } from "../src/catalog/bulkImport/routes.js";
 import { registerAgentChatRoutes } from "./agentChat.js";
+import { registerWebhookRoutes } from "./webhooks.js";
 import { registerMetricsRoutes } from "../src/metrics.js";
 import {
   dbSlaStatusHandler,
@@ -309,5 +310,7 @@ export function registerRoutes(): Route[] {
     ...registerBulkCatalogImportRoutes(),
     // Agent Chat - SSE streaming for agent conversations
     ...registerAgentChatRoutes(),
+    // Courier webhooks - FedEx/DHL/UPS normalizer (Issue #577)
+    ...registerWebhookRoutes(),
   ];
 }
