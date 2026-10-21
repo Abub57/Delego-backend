@@ -9,6 +9,7 @@
  *   - Wildcard certificate support (dns-01)
  *   - Certificate revocation
  *   - Deployment automation (nginx/haproxy/envoy/webhook)
+ *   - Merchant custom-domain CNAME verification + http-01 provisioning (#597)
  *   - Merchant storefront SSL/TLS expiry monitoring (Issue #390)
  */
 import { createLogger, createHealthRoutes, startHttpServer, HealthRegistry } from "@delegolabs/utils";
@@ -30,6 +31,11 @@ import { registerCertExpiryRoutes } from "./routes/certExpiryRoutes.js";
 import { CertExpiryChecker } from "./expiry/checker.js";
 import { ExpiryScheduler } from "./expiry/scheduler.js";
 import { createCertExpiryAlerter } from "./expiry/alerter.js";
+import {
+  InMemoryHttp01ChallengeResponder,
+  startHttp01ChallengeServer,
+} from "./acme/http01.js";
+import { startDomainVerificationWorker, type DomainVerificationWorker } from "./worker.js";
 
 const SERVICE_NAME = "certmanager";
 const DEFAULT_PORT = 3020;
@@ -206,6 +212,25 @@ if (process.env.CERT_EXPIRY_ENABLED !== "false") {
   expiryScheduler.start();
 }
 
+// Merchant custom-domain verification + Let's Encrypt http-01 provisioning.
+// Off by default because it needs PostgreSQL and an ACME account key.
+const challengeResponder = new InMemoryHttp01ChallengeResponder();
+let domainWorker: DomainVerificationWorker | undefined;
+
+if (process.env.CERT_DOMAIN_WORKER_ENABLED === "true") {
+  domainWorker = startDomainVerificationWorker({ responder: challengeResponder, log });
+
+  if (process.env.CERT_HTTP01_SERVE !== "false") {
+    void startHttp01ChallengeServer(challengeResponder)
+      .then((server) => log.info("http-01 challenge server listening", { url: server.url }))
+      .catch((err) =>
+        log.error("http-01 challenge server failed to start", {
+          error: (err as Error).message,
+        }),
+      );
+  }
+}
+
 export {
   service,
   scheduler,
@@ -213,4 +238,6 @@ export {
   storageRotationScheduler,
   expiryChecker,
   expiryScheduler,
+  domainWorker,
+  challengeResponder,
 };

@@ -165,6 +165,9 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.23.1
       tsx:
         specifier: ^4.19.0
         version: 4.23.13

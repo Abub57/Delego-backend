@@ -84,3 +84,24 @@ export interface CtLogResult {
   submittedAt: string;
   sct?: string;
 }
+
+/**
+ * #597 — A merchant custom-domain verification job consumed by the certmanager
+ * background worker. The merchant points `customDomain` at `targetCname` (a
+ * Delego edge hostname); the worker verifies propagation before issuing a
+ * certificate via the ACME http-01 challenge.
+ */
+export interface DomainVerificationJobData {
+  merchantId: string;
+  customDomain: string;
+  targetCname: string;
+}
+
+/** Result of a successful Let's Encrypt certificate provisioning run. */
+export interface AcmeCertProvisionResult {
+  domain: string;
+  certificatePem: string;
+  privateKeyPem: string;
+  expiresAt: string;
+  renewBefore: string;
+}

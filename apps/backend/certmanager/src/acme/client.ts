@@ -49,6 +49,7 @@ export class StubAcmeClient implements AcmeClient {
       domain: input.domains[0],
       value: "stub-challenge-token",
       targetDomain: input.domains[0].replace(/^\*\./, ""),
+      token: "stub-challenge-token",
     };
     await input.present(challenge);
     try {
@@ -109,12 +110,18 @@ export class HttpAcmeClient implements AcmeClient {
       const challenge = (authz.challenges as Array<any>).find((c) => c.type === input.challengeType);
       if (!challenge) throw new Error(`no ${input.challengeType} challenge offered`);
       const token = challenge.token as string;
-      const value = this.computeDnsValue(token);
+      // http-01 serves `<token>.<account thumbprint>`; dns-01 serves the
+      // base64url SHA-256 digest required by RFC 8555 §8.4.
+      const value =
+        input.challengeType === "http-01"
+          ? this.computeHttpValue(token)
+          : this.computeDnsValue(token);
       const acmeChallenge: AcmeChallenge = {
         type: input.challengeType,
         domain: input.domains[0],
         value,
         targetDomain: input.domains[0].replace(/^\*\./, ""),
+        token,
       };
       await input.present(acmeChallenge);
       try {
@@ -125,13 +132,13 @@ export class HttpAcmeClient implements AcmeClient {
       }
     }
 
-    const { csrPem } = await generateCsr(input.domains);
+    const { csrPem, privateKeyPem } = await generateCsr(input.domains);
     const finalize = await this.postJson(order.finalize, { csr: csrPem });
     const cert = await this.pollCertificate(finalize.certificate);
     return {
       certificatePem: cert,
       fullchainPem: cert,
-      privateKeyPem: "",
+      privateKeyPem,
       issuer: this.provider,
       serialNumber: randomSerial(),
       notBefore: new Date().toISOString(),
@@ -146,6 +153,11 @@ export class HttpAcmeClient implements AcmeClient {
 
   private computeDnsValue(token: string): string {
     return createHash("sha256").update(`${token}.${this.accountKey}`).digest("base64");
+  }
+
+  /** http-01 responds with `<token>.<account key thumbprint>`. */
+  private computeHttpValue(token: string): string {
+    return `${token}.${this.accountKey}`;
   }
 
   private async getJson(url: string): Promise<any> {
