@@ -18,6 +18,7 @@ export type { ReviewModerationVerdict } from "./ReviewModerationAuditLog.js";
 import { DeliveryEvidence } from "./DeliveryEvidence.js";
 import { PaymentRecord } from "./PaymentRecord.js";
 import { Merchant } from "./Merchant.js";
+import { Discount } from "./Discount.js";
 
 // User <-> Wallet (One-to-Many)
 User.hasMany(Wallet, { foreignKey: "userId", as: "wallets" });
@@ -91,6 +92,10 @@ ReviewModerationAuditLog.belongsTo(ReviewAppeal, { foreignKey: "appealId", as: "
 PaymentRecord.hasMany(Review, { foreignKey: "orderId", targetKey: "orderId", as: "reviews" } as HasManyOptions);
 Review.belongsTo(PaymentRecord, { foreignKey: "orderId", targetKey: "orderId", as: "payment" });
 
+// Merchant <-> Discount (One-to-Many)
+Merchant.hasMany(Discount, { foreignKey: "merchantId", as: "discounts" });
+Discount.belongsTo(Merchant, { foreignKey: "merchantId", as: "merchant" });
+
 export {
   User,
   Wallet,
@@ -110,4 +115,5 @@ export {
   DeliveryEvidence,
   PaymentRecord,
   Merchant,
+  Discount,
 };

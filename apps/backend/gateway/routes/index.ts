@@ -123,6 +123,7 @@ import { registerWaitlistRoutes } from "../src/waitlist/routes.js";
 import { registerBulkCatalogImportRoutes } from "../src/catalog/bulkImport/routes.js";
 import { registerAgentChatRoutes } from "./agentChat.js";
 import { registerWebhookRoutes } from "./webhooks.js";
+import { registerDiscountRoutes } from "./discounts.js";
 import { registerMetricsRoutes } from "../src/metrics.js";
 import { registerOracleRateRoutes } from "../src/oracle/routes.js";
 import {
@@ -315,5 +316,7 @@ export function registerRoutes(): Route[] {
     ...registerAgentChatRoutes(),
     // Courier webhooks - FedEx/DHL/UPS normalizer (Issue #577)
     ...registerWebhookRoutes(),
+    // Merchant Discounts - promotion campaigns
+    ...registerDiscountRoutes(),
   ];
 }
