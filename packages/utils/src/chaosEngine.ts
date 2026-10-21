@@ -41,7 +41,8 @@ export class ChaosEngine {
 
     let steadyStateMaintained = true;
 
-    for (const [metric, threshold] of Object.entries(experiment.steadyState.thresholds)) {
+    for (const [metric, rawThreshold] of Object.entries(experiment.steadyState.thresholds)) {
+      const threshold = Number(rawThreshold);
       const actual = observedMetrics[metric] ?? 0;
       const deviation = Math.abs(actual - threshold);
       const metricFailed = actual > threshold;

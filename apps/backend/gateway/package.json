@@ -14,7 +14,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@delegolabs/utils": "workspace:*",
     "@aws-sdk/client-s3": "^3.758.0",
     "@aws-sdk/s3-request-presigner": "^3.758.0",
     "@delegolabs/payments": "workspace:*",
@@ -29,8 +28,10 @@
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.21.0",
     "pg-hstore": "^2.3.4",
+    "pino": "^9.6.0",
     "redis": "^4.7.1",
-    "sequelize": "^6.37.8"
+    "sequelize": "^6.37.8",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.758.0",

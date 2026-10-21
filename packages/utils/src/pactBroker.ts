@@ -118,7 +118,7 @@ export class PactBrokerManager {
       ``,
       `## Interactions`,
       ...contract.interactions.map(
-        (i, idx) => `### ${idx + 1}. ${i.description}
+        (i: any, idx: number) => `### ${idx + 1}. ${i.description}
 - **Request:** \`${i.request.method} ${i.request.path}\`
 - **Response Status:** \`${i.response.status}\``,
       ),

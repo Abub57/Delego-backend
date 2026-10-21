@@ -120,6 +120,7 @@ import { registerVariantRoutes } from "../src/catalog/variants.js";
 import { registerReviewRoutes } from "../src/catalog/reviews.js";
 import { registerDeliveryEvidenceRoutes } from "../src/catalog/deliveryEvidence.js";
 import { registerAgentChatRoutes } from "./agentChat.js";
+import { registerDiscountRoutes } from "./discounts.js";
 import { registerMetricsRoutes } from "../src/metrics.js";
 import {
   dbSlaStatusHandler,
@@ -303,5 +304,7 @@ export function registerRoutes(): Route[] {
     ...registerDeliveryEvidenceRoutes(),
     // Agent Chat - SSE streaming for agent conversations
     ...registerAgentChatRoutes(),
+    // Merchant Discounts - promotion campaigns
+    ...registerDiscountRoutes(),
   ];
 }
