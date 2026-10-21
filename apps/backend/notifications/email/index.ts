@@ -1,4 +1,5 @@
 import sgMail from "@sendgrid/mail";
+import { isSmtpConfigured, sendSmtpEmail } from "./mailer.js";
 import { createLogger } from "@delegolabs/utils";
 import { classifyError, calculateBackoffDelay } from "./errorClassifier.js";
 import { getRetryConfig } from "./config.js";
@@ -72,7 +73,7 @@ export function renderTemplate(
 }
 
 export async function sendEmail(message: EmailMessage): Promise<void> {
-  if (!SENDGRID_API_KEY) {
+  if (!isSmtpConfigured && !SENDGRID_API_KEY) {
     throw new Error("SENDGRID_API_KEY is not configured");
   }
 
@@ -106,13 +107,20 @@ export async function sendEmail(message: EmailMessage): Promise<void> {
     text = text ?? rendered.text;
   }
 
-  await sgMail.send({
+  const outboundMessage = {
     to: message.to,
     from: FROM_EMAIL,
     subject: message.subject,
     html,
     ...(text ? { text } : {}),
-  });
+  };
+
+  if (isSmtpConfigured) {
+    await sendSmtpEmail(outboundMessage);
+    return;
+  }
+
+  await sgMail.send(outboundMessage);
 }
 
 /**
