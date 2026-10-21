@@ -9,7 +9,6 @@ import {
   startHttpServer,
   tracedFetch,
   initTelemetry,
-  createHealthRoutes,
   corsMiddleware,
   securityHeadersMiddleware,
   requireAuth,

@@ -24,20 +24,72 @@ async function readJsonBody(req: IncomingMessage): Promise<any> {
 
 export async function multiMerchantCheckoutHandler(req: IncomingMessage, res: ServerResponse) {
   try {
-    const body = await readJsonBody(req) as MultiMerchantCheckoutRequest;
-
-    if (typeof body.cartId !== "string" || typeof body.shippingAddressId !== "string" || typeof body.settlementCurrency !== "string") {
+    let body: MultiMerchantCheckoutRequest;
+    try {
+      body = (await readJsonBody(req)) as MultiMerchantCheckoutRequest;
+    } catch (e) {
       json(res, 400, {
         data: null,
         error: {
           code: "VALIDATION_ERROR",
-          message: "cartId, shippingAddressId, and settlementCurrency are required",
+          message: "Malformed JSON body",
         },
       });
       return;
     }
 
-    const result = await orchestrateMultiMerchantCheckout(body);
+    if (!body || typeof body !== "object") {
+      json(res, 400, {
+        data: null,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Invalid request body",
+        },
+      });
+      return;
+    }
+
+    if (typeof body.cartId !== "string" || body.cartId.trim() === "") {
+      json(res, 400, {
+        data: null,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "cartId is required",
+        },
+      });
+      return;
+    }
+    if (typeof body.shippingAddressId !== "string" || body.shippingAddressId.trim() === "") {
+      json(res, 400, {
+        data: null,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "shippingAddressId is required",
+        },
+      });
+      return;
+    }
+    if (typeof body.settlementCurrency !== "string" || body.settlementCurrency.trim() === "") {
+      json(res, 400, {
+        data: null,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "settlementCurrency is required",
+        },
+      });
+      return;
+    }
+
+    const authenticatedUserId = (req as typeof req & { userId?: string }).userId;
+    if (!authenticatedUserId) {
+      json(res, 401, {
+        data: null,
+        error: { code: "UNAUTHORIZED", message: "Authentication required" },
+      });
+      return;
+    }
+
+    const result = await orchestrateMultiMerchantCheckout(body, authenticatedUserId);
 
     json(res, 200, {
       data: result,
@@ -50,6 +102,26 @@ export async function multiMerchantCheckoutHandler(req: IncomingMessage, res: Se
         data: null,
         error: {
           code: "INSUFFICIENT_STOCK",
+          message: "Insufficient stock",
+        },
+      });
+      return;
+    }
+    if (message.includes("Cart does not belong") || message.includes("not found") || message.includes("empty")) {
+      json(res, 404, {
+        data: null,
+        error: {
+          code: "NOT_FOUND",
+          message,
+        },
+      });
+      return;
+    }
+    if (message.includes("required") || message.includes("Invalid") || message.includes("quantity")) {
+      json(res, 400, {
+        data: null,
+        error: {
+          code: "VALIDATION_ERROR",
           message,
         },
       });
@@ -59,7 +131,7 @@ export async function multiMerchantCheckoutHandler(req: IncomingMessage, res: Se
       data: null,
       error: {
         code: "INTERNAL_ERROR",
-        message,
+        message: "Internal server error",
       },
     });
   }
