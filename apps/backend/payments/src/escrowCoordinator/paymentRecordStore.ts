@@ -44,6 +44,11 @@ interface PaymentRecordRow extends QueryResultRow {
   released_amount_stroops: string;
   refunded_amount_stroops: string;
   failure_reason: string | null;
+  // Tax breakdown columns (migration 046)
+  subtotal_stroops: string | null;
+  tax_amount_stroops: string | null;
+  tax_rate_basis_points: number | null;
+  tax_jurisdiction: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -66,6 +71,12 @@ function mapRow(row: PaymentRecordRow): PaymentRecord {
     releasedAmountStroops: row.released_amount_stroops ?? "0",
     refundedAmountStroops: row.refunded_amount_stroops ?? "0",
     failureReason: row.failure_reason,
+    // Tax breakdown — fall back to safe defaults for pre-046 rows where the
+    // columns may not yet have been backfilled (e.g. during a rolling deploy).
+    subtotalStroops: row.subtotal_stroops ?? row.amount_stroops,
+    taxAmountStroops: row.tax_amount_stroops ?? "0",
+    taxRateBasisPoints: row.tax_rate_basis_points ?? 0,
+    taxJurisdiction: row.tax_jurisdiction ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -100,6 +111,29 @@ export async function findPaymentRecordByEscrowId(
 export async function createPaymentRecord(
   input: CreatePaymentRecordInput
 ): Promise<PaymentRecord> {
+  // Resolve tax fields: callers that don't supply them get safe defaults so
+  // the service is backwards-compatible with pre-046 call sites.
+  const subtotalStroops = input.subtotalStroops ?? input.amountStroops;
+  const taxAmountStroops = input.taxAmountStroops ?? "0";
+  const taxRateBasisPoints = input.taxRateBasisPoints ?? 0;
+  const taxJurisdiction = input.taxJurisdiction ?? null;
+
+  // Validate with BigInt to catch non-integer stroop strings early.
+  try {
+    const sub = BigInt(subtotalStroops);
+    const tax = BigInt(taxAmountStroops);
+    if (sub < 0n) throw new Error("subtotalStroops must be non-negative");
+    if (tax < 0n) throw new Error("taxAmountStroops must be non-negative");
+    if (tax > sub) throw new Error("taxAmountStroops must not exceed subtotalStroops");
+  } catch (err) {
+    throw new Error(
+      `Invalid tax breakdown values: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  if (!Number.isInteger(taxRateBasisPoints) || taxRateBasisPoints < 0) {
+    throw new Error("taxRateBasisPoints must be a non-negative integer");
+  }
+
   const { rows } = await getPool().query<PaymentRecordRow>(
     `INSERT INTO payment_records (
        order_id,
@@ -108,9 +142,13 @@ export async function createPaymentRecord(
        seller_address,
        token_contract_id,
        amount_stroops,
+       subtotal_stroops,
+       tax_amount_stroops,
+       tax_rate_basis_points,
+       tax_jurisdiction,
        status
      )
-     VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
      RETURNING *`,
     [
       input.orderId,
@@ -119,11 +157,22 @@ export async function createPaymentRecord(
       input.sellerAddress,
       input.tokenContractId,
       input.amountStroops,
+      subtotalStroops,
+      taxAmountStroops,
+      taxRateBasisPoints,
+      taxJurisdiction,
     ]
   );
 
   const record = mapRow(rows[0]);
-  log.info("Payment record created", { orderId: record.orderId, id: record.id });
+  log.info("Payment record created", {
+    orderId: record.orderId,
+    id: record.id,
+    subtotalStroops: record.subtotalStroops,
+    taxAmountStroops: record.taxAmountStroops,
+    taxRateBasisPoints: record.taxRateBasisPoints,
+    taxJurisdiction: record.taxJurisdiction,
+  });
   return record;
 }
 
@@ -178,6 +227,68 @@ export async function updatePaymentRecord(
 
   if (!rows[0]) throw new Error(`Payment record not found: ${id}`);
   return mapRow(rows[0]);
+}
+
+// ---------------------------------------------------------------------------
+// Migration 046 — Tax breakdown update (settlement service)
+// ---------------------------------------------------------------------------
+
+export interface PaymentRecordTaxUpdate {
+  subtotalStroops: string;
+  taxAmountStroops: string;
+  taxRateBasisPoints: number;
+  taxJurisdiction?: string | null;
+}
+
+/**
+ * Persist itemized tax breakdown on an existing payment record.
+ *
+ * Called by the order-creation and settlement services once they have
+ * computed the final per-jurisdiction tax figures.  Uses BigInt stroop
+ * arithmetic to validate values before writing so invalid data never
+ * reaches the database.
+ */
+export async function updatePaymentTaxBreakdown(
+  id: string,
+  tax: PaymentRecordTaxUpdate
+): Promise<PaymentRecord> {
+  const sub = BigInt(tax.subtotalStroops);
+  const taxAmt = BigInt(tax.taxAmountStroops);
+  if (sub < 0n) throw new Error("subtotalStroops must be non-negative");
+  if (taxAmt < 0n) throw new Error("taxAmountStroops must be non-negative");
+  if (taxAmt > sub) throw new Error("taxAmountStroops must not exceed subtotalStroops");
+  if (!Number.isInteger(tax.taxRateBasisPoints) || tax.taxRateBasisPoints < 0) {
+    throw new Error("taxRateBasisPoints must be a non-negative integer");
+  }
+
+  const { rows } = await getPool().query<PaymentRecordRow>(
+    `UPDATE payment_records
+        SET subtotal_stroops      = $2,
+            tax_amount_stroops    = $3,
+            tax_rate_basis_points = $4,
+            tax_jurisdiction      = $5,
+            updated_at            = NOW()
+      WHERE id = $1
+      RETURNING *`,
+    [
+      id,
+      tax.subtotalStroops,
+      tax.taxAmountStroops,
+      tax.taxRateBasisPoints,
+      tax.taxJurisdiction ?? null,
+    ]
+  );
+
+  if (!rows[0]) throw new Error(`Payment record not found: ${id}`);
+  const record = mapRow(rows[0]);
+  log.info("Payment record tax breakdown updated", {
+    id,
+    subtotalStroops: record.subtotalStroops,
+    taxAmountStroops: record.taxAmountStroops,
+    taxRateBasisPoints: record.taxRateBasisPoints,
+    taxJurisdiction: record.taxJurisdiction,
+  });
+  return record;
 }
 
 // ---------------------------------------------------------------------------

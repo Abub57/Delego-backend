@@ -84,3 +84,11 @@ export {
   type RedisLockPayload,
   type RedisLockRenewResult,
 } from "./lock.js";
+
+export {
+  SentinelFailoverHealthBridge,
+  SentinelReadonlyError,
+  type RedisClusterHealthReport,
+  type SentinelRedisClient,
+  type SentinelFailoverHealthBridgeOptions,
+} from "./sentinelFailover.js";

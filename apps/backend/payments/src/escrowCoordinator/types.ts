@@ -171,6 +171,21 @@ export interface PaymentRecord {
   /** Cumulative amount refunded to the buyer so far (full + partial refunds), in stroops. */
   refundedAmountStroops: string;
   failureReason: string | null;
+  // ── Tax breakdown (migration 046) ────────────────────────────────────────
+  /** Pre-tax item total in stroops. Equals amountStroops for pre-046 records. */
+  subtotalStroops: string;
+  /** VAT / sales tax charged in stroops. "0" for pre-046 records. */
+  taxAmountStroops: string;
+  /**
+   * Applied tax rate in basis points (100 bp = 1 %).
+   * 0 for pre-046 records (no tax was recorded).
+   */
+  taxRateBasisPoints: number;
+  /**
+   * ISO 3166-2 subdivision code or free-form jurisdiction label (e.g. "US-CA").
+   * null for pre-046 records.
+   */
+  taxJurisdiction: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -182,6 +197,18 @@ export interface CreatePaymentRecordInput {
   sellerAddress: string;
   tokenContractId: string;
   amountStroops: string;
+  // ── Tax breakdown (migration 046, optional on creation) ──────────────────
+  /**
+   * Pre-tax item subtotal in stroops. When omitted, `amountStroops` is used
+   * as the subtotal (backwards-compatible with pre-046 callers).
+   */
+  subtotalStroops?: string;
+  /** VAT / sales tax in stroops. Defaults to "0". */
+  taxAmountStroops?: string;
+  /** Tax rate in basis points. Defaults to 0. */
+  taxRateBasisPoints?: number;
+  /** Jurisdiction label (e.g. "US-CA"). Defaults to null. */
+  taxJurisdiction?: string | null;
 }
 
 // Issue #147 — Escrow funding lock optimization types
