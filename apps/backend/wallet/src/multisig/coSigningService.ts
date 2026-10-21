@@ -27,6 +27,7 @@ import type {
   MultiSigSession,
   SubmitCombinedTransaction,
 } from "./coSigningTypes.js";
+import { createHorizonServer, isMockModeEnabled } from "../../stellar/mockHorizon.js";
 
 const log = createLogger(
   "wallet:multisig:cosigning",
@@ -232,7 +233,7 @@ export function createHorizonSubmitter(): SubmitCombinedTransaction {
     (network === "mainnet"
       ? "https://horizon.stellar.org"
       : "https://horizon-testnet.stellar.org");
-  const server = new Horizon.Server(horizonUrl);
+  const server = isMockModeEnabled() ? createHorizonServer(horizonUrl) : new Horizon.Server(horizonUrl);
   return async (combinedXdr: string) => {
     const tx = TransactionBuilder.fromXDR(
       combinedXdr,

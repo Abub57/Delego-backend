@@ -11,6 +11,7 @@ import { Redis } from "ioredis";
 import { createLogger, type Logger } from "@delegolabs/utils";
 import type { FaucetRequest, FaucetResponse } from "@delegolabs/types";
 import { Horizon, Asset, TransactionBuilder, Operation, Keypair, Networks, StrKey } from "@stellar/stellar-sdk";
+import { createHorizonServer, isMockModeEnabled } from "../../stellar/mockHorizon.js";
 
 const log = createLogger("wallet:faucetDispenser", process.env.LOG_LEVEL ?? "info");
 
@@ -324,7 +325,7 @@ export class FaucetDispenserService {
 
       try {
         const issuerKeypair = Keypair.fromSecret(this.mockUsdcIssuerSecret);
-        const server = new Horizon.Server(this.horizonUrl);
+        const server = isMockModeEnabled() ? createHorizonServer(this.horizonUrl) : new Horizon.Server(this.horizonUrl);
         const issuerAccount = await server.loadAccount(issuerKeypair.publicKey());
 
         const usdcAsset = new Asset(normalizedTokenCode, issuerKeypair.publicKey());

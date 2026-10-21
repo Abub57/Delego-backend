@@ -31,6 +31,7 @@ import {
 } from "./sequenceMonitoring.js";
 import { addToDLQ } from "./transactionDLQ.js";
 import { insertAuditLog } from "../transactions/auditLog.js";
+import { createHorizonServer, isMockModeEnabled, type MockHorizonServer } from "../../stellar/mockHorizon.js";
 
 export { classifySubmissionFailure, type SubmissionFailure } from "./submissionFailure.js";
 
@@ -169,6 +170,15 @@ function throwClassifiedSubmissionFailure(
 const QUEUE_NAME = "stellar-tx-queue";
 
 function getStellarConfig() {
+  // Return mock config early if mock mode is enabled
+  if (isMockModeEnabled()) {
+    return {
+      horizonUrl: "mock://horizon",
+      rpcUrl: "mock://soroban-rpc",
+      networkPassphrase: Networks.TESTNET,
+    };
+  }
+
   const network = (process.env.STELLAR_NETWORK ?? "testnet").toLowerCase();
   let horizonUrl = "https://horizon-testnet.stellar.org";
   let rpcUrl = "https://soroban-testnet.stellar.org";
@@ -318,7 +328,7 @@ export async function reserveSequenceBlock(
   address: string,
   size: number,
   redis: Redis,
-  horizonServer: Horizon.Server
+  horizonServer: Pick<Horizon.Server, "loadAccount">
 ): Promise<SequenceReservation> {
   const accountKey = `seq:reservations:${address}`;
   const lockKey = `seq:lock:${address}`;
@@ -461,7 +471,7 @@ async function getNextSequenceFromReservation(
 
 // Synchronize and manage sequence numbers thread-safely per source address in Redis
 async function getNextSequenceNumber(
-  horizonServer: Horizon.Server,
+  horizonServer: Pick<Horizon.Server, "loadAccount">,
   sourceAddress: string,
   redis: Redis,
   attempt: number
@@ -614,7 +624,7 @@ async function executeTxJob(
   connection: Redis
 ): Promise<TransactionResult> {
   const { horizonUrl, rpcUrl, networkPassphrase } = getStellarConfig();
-  const horizonServer = new Horizon.Server(horizonUrl);
+  const horizonServer = createHorizonServer(horizonUrl);
   const rpcServer = new rpc.Server(rpcUrl);
 
   // 1. Fetch private key from Vault
@@ -899,13 +909,15 @@ async function runTestJob(request: TransactionRequest, connection: Redis): Promi
 
 async function verifyLedgerSubmission(hash: string): Promise<boolean> {
   const { horizonUrl } = getStellarConfig();
-  const horizonServer = new Horizon.Server(horizonUrl);
+  const horizonServer = createHorizonServer(horizonUrl);
 
   try {
     await horizonServer.transactions().transaction(hash).call();
     return true;
   } catch (err: any) {
-    if (err?.response?.status === 404) {
+    // Handle both real Horizon errors and mock errors
+    const isNotFound = err.response?.status === 404 || err.message?.includes("not found");
+    if (isNotFound) {
       return false;
     }
     return false;

@@ -42,6 +42,7 @@ import { registerFaucetRoutes } from "./faucet/routes.js";
 import { registerFeeEstimatorRoutes } from "./feeEstimator/routes.js";
 import { registerMerchantDomainRoutes } from "./merchantDomain/routes.js";
 import { registerPathQuoteRoutes } from "./pathPayments/quoteProxy/routes.js";
+import { createHorizonServer, isMockModeEnabled } from "../stellar/mockHorizon.js";
 
 const log = createLogger("wallet:routes", process.env.LOG_LEVEL ?? "info");
 
@@ -572,7 +573,7 @@ export function registerRoutes(
             });
           }
 
-          const server = new Horizon.Server(horizonUrl);
+          const server = isMockModeEnabled() ? createHorizonServer(horizonUrl) : new Horizon.Server(horizonUrl);
           let account;
           try {
             account = await retryWithBackoff(() => server.loadAccount(address));
@@ -745,7 +746,7 @@ export function registerRoutes(
           const networkPassphrase =
             network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
 
-          const server = new Horizon.Server(horizonUrl);
+          const server = isMockModeEnabled() ? createHorizonServer(horizonUrl) : new Horizon.Server(horizonUrl);
 
           let txResponse;
           try {

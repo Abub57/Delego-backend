@@ -13,6 +13,7 @@
 
 import { Horizon, Asset, StrKey } from '@stellar/stellar-sdk';
 import type { PathPaymentQuoteRequest, PathPaymentQuoteResponse, PathHop } from './types.js';
+import { createHorizonServer, isMockModeEnabled } from "../../stellar/mockHorizon.js";
 
 /** Buffer added to sourceAmountMax (0.5%) */
 const SOURCE_AMOUNT_BUFFER = 0.005;
@@ -21,10 +22,10 @@ const SOURCE_AMOUNT_BUFFER = 0.005;
 const MAX_PRICE_IMPACT_PERCENT = 2.5;
 
 export class PathPaymentQuoteEngine {
-  private horizon: Horizon.Server;
+  private horizon: Pick<Horizon.Server, "paths" | "loadAccount">;
 
   constructor(horizonUrl: string = 'https://horizon-testnet.stellar.org') {
-    this.horizon = new Horizon.Server(horizonUrl);
+    this.horizon = isMockModeEnabled() ? createHorizonServer(horizonUrl) : new Horizon.Server(horizonUrl);
   }
 
   /**

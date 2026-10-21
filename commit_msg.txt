@@ -1,0 +1,8 @@
+fix(#560): Add MockHorizonClient for offline test execution
+
+- Create MockHorizonClient in apps/backend/wallet/src/stellar/mockHorizon.ts with stubbed account sequences, ledger responses, and simulated transaction submits
+- Inject mock provider automatically when NODE_ENV === 'test' or MOCK_HORIZON === 'true'
+- Update networkConfig.ts with isMockModeEnabled() and getMockNetworkConfig()
+- Update all Horizon.Server instantiations to use createHorizonServer() factory
+- Add comprehensive tests for mock client in mockHorizon.test.ts and networkConfig.test.ts
+- Wallet unit tests now execute deterministically without external network calls
