@@ -57,6 +57,7 @@ The incremental migrations are:
 | `036_notification_preference_center.sql` | Notification preference center: org defaults, JSONB preference documents, and migration history (#115) |
 | `037_multi_currency.sql` | Multi-currency payments, FX rates, and currency settlements (#112) |
 | `038_column_encryption.sql` | Column-level encryption for PII at rest: data-encryption-key version registry and append-only key-access audit log (#68) |
+| `040_custom_domain_certificates.sql` | Merchant custom-domain CNAME verification queue and AES-256-GCM encrypted TLS certificate storage (#597) |
 
 ## Naming rules
 

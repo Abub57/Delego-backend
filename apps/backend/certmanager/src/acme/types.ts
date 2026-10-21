@@ -7,6 +7,8 @@ export interface AcmeChallenge {
   value: string;
   /** For wildcard the affected zone root. */
   targetDomain: string;
+  /** The ACME challenge token — the http-01 URL path segment. */
+  token?: string;
 }
 
 export interface AcmeClient {
