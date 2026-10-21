@@ -1,5 +1,9 @@
 /**
  * guardrails/ — Issue #267
+ *
+ * Note: The stock alert rules migration/repository work described in the
+ * issue is implemented under database/migrations and apps/backend/src/stock.
+ * This barrel file is intentionally left unchanged in scope.
  */
 export { GuardrailMiddleware, GuardrailValidationError } from "./middleware.js";
 export type {
