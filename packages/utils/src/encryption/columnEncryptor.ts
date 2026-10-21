@@ -24,7 +24,7 @@ import type {
   FieldAccessRole,
   PiiColumn,
 } from "@delegolabs/types";
-import { decryptField, encryptField, blindIndex, EncryptionError } from "./cipher.js";
+import { decryptField, encryptField, blindIndex, EncryptionError, hasEncryptionEnvelope } from "./cipher.js";
 import type { KeyProvider } from "./keyProvider.js";
 import { KeyAccessAuditor } from "./audit.js";
 import { FieldAccessController } from "./accessControl.js";
@@ -41,6 +41,12 @@ export interface EncryptOptions {
 export interface DecryptOptions {
   context?: Record<string, string>;
   actorRole?: FieldAccessRole;
+}
+
+export interface DecryptionResult<T> {
+  data: T;
+  wasEncrypted: boolean;
+  keyVersion?: number;
 }
 
 export interface ColumnEncryptorConfig {
@@ -194,6 +200,66 @@ export class ColumnEncryptor {
       result.index = blindIndex(plaintext, dataKey.key, `${table}.${column}`);
     }
     return result;
+  }
+
+  /**
+   * Safely decrypt a field with graceful fallback for legacy plaintext data.
+   * 
+   * When reading historical data created before encryption was enabled, this method:
+   * 1. Checks for the encryption envelope prefix (enc:v1:)
+   * 2. If present, decrypts the data normally
+   * 3. If absent, returns the plaintext with wasEncrypted=false
+   * 
+   * This prevents "Unsupported state or unable to authenticate data" errors
+   * when loading legacy order notes and other historical PII fields.
+   * 
+   * Returns DecryptionResult with:
+   *   - data: the plaintext value (decrypted or passthrough)
+   *   - wasEncrypted: true if data was encrypted, false for legacy plaintext
+   *   - keyVersion: the key version used (only when wasEncrypted=true)
+   */
+  async decryptSafe(
+    table: string,
+    column: string,
+    value: string | EncryptedField,
+    options: DecryptOptions = {}
+  ): Promise<DecryptionResult<string>> {
+    // Handle string values (database column value)
+    if (typeof value === "string") {
+      // Check for encryption envelope prefix
+      if (!hasEncryptionEnvelope(value)) {
+        // Legacy plaintext - return as-is without decryption
+        return {
+          data: value,
+          wasEncrypted: false,
+        };
+      }
+      
+      // If we have envelope but no EncryptedField structure, we can't decrypt
+      throw new EncryptionError(
+        `Value has encryption envelope but EncryptedField structure is required for decryption`
+      );
+    }
+
+    // Handle EncryptedField structure
+    const field = value as EncryptedField;
+    
+    // Check if the ciphertext has encryption envelope
+    if (!hasEncryptionEnvelope(field.ciphertext)) {
+      // Legacy plaintext stored in EncryptedField structure - return ciphertext as plaintext
+      return {
+        data: field.ciphertext,
+        wasEncrypted: false,
+      };
+    }
+
+    // Modern encrypted data - decrypt normally
+    const result = await this.decrypt(table, column, field, options);
+    return {
+      data: result.plaintext,
+      wasEncrypted: true,
+      keyVersion: field.keyVersion,
+    };
   }
 
   /** Compute the blind index for an equality lookup without decrypting. */

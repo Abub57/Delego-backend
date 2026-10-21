@@ -17,11 +17,15 @@ export {
   blindIndex,
   serializeContext,
   contextAad,
+  hasEncryptionEnvelope,
+  stripEncryptionEnvelope,
   EncryptionError,
   GCM_IV_LENGTH,
   GCM_AUTH_TAG_LENGTH,
   CBC_IV_LENGTH,
   KEY_LENGTH,
+  ENCRYPTION_ENVELOPE_PREFIX,
+  ENCRYPTION_ENVELOPE_VERSION,
 } from "./cipher.js";
 export {
   createKeyProvider,
@@ -57,6 +61,7 @@ export {
   type ColumnEncryptorConfig,
   type DecryptOptions,
   type EncryptOptions,
+  type DecryptionResult,
 } from "./columnEncryptor.js";
 export {
   KeyRotationManager,
