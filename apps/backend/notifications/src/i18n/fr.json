@@ -33,5 +33,8 @@
   "sms_auto_release_warning_body": "Delego : le séquestre de la commande {{orderId}} (suivi {{trackingNumber}}) sera bientôt versé au marchand. En cas de problème avec votre livraison, ouvrez un litige avant.",
 
   "sms_refund_processed_subject": "Remboursement effectué pour la commande {{orderId}}",
-  "sms_refund_processed_body": "Delego : le remboursement de la commande {{orderId}} (suivi {{trackingNumber}}) a été effectué."
+  "sms_refund_processed_body": "Delego : le remboursement de la commande {{orderId}} (suivi {{trackingNumber}}) a été effectué.",
+
+  "escrow_release_reminder_subject": "Rappel : confirmez la réception de la commande {{orderId}} dans les {{hours}} heures",
+  "escrow_release_reminder_body": "Votre commande {{orderId}} de {{merchant}} sera finalisée automatiquement le {{deadline}} (dans environ {{hours}} heures) si vous n'avez pas confirmé la réception. Si tout est arrivé comme prévu, confirmez dès maintenant : {{confirmUrl}}\n\nEn cas de problème avec votre commande, ouvrez un litige avant cette échéance."
 }

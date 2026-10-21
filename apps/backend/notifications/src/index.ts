@@ -16,6 +16,7 @@ import {
 import { getVapidPublicKey } from "../push/index.js";
 import { startPermissionEventListener } from "./permissionEventListener.js";
 import { startEscrowEventListener } from "./escrowEventListener.js";
+import { startEscrowReminderWorker, type EscrowReminderWorkerHandle } from "./escrowReminder.js";
 import {
   cancelScheduledNotification,
   catchUpMissedNotifications,
@@ -104,6 +105,24 @@ if (rpcUrl && permissionsContractId) {
   log.info(
     "Permission event listener disabled (set STELLAR_RPC_URL and PERMISSIONS_CONTRACT_ID to enable)"
   );
+}
+
+// Issue #587 — opt-in escrow release reminder worker (BullMQ, needs Redis and
+// orders.escrow_deadline from migration 049). Enable with ESCROW_REMINDERS_ENABLED=true.
+let escrowReminderWorker: EscrowReminderWorkerHandle | null = null;
+if (process.env.ESCROW_REMINDERS_ENABLED === "true") {
+  startEscrowReminderWorker({ db: notificationDb })
+    .then((handle) => {
+      escrowReminderWorker = handle;
+      log.info("Escrow reminder worker started");
+    })
+    .catch((err: unknown) => {
+      log.error("Failed to start escrow reminder worker", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+} else {
+  log.info("Escrow reminder worker disabled (set ESCROW_REMINDERS_ENABLED=true to enable)");
 }
 
 // Issue #56 — opt-in escrow event listener.
@@ -682,6 +701,15 @@ async function gracefulShutdown(signal: NodeJS.Signals): Promise<void> {
       await permissionListener.stop();
     } catch (err) {
       log.error("Failed to stop permission event listener cleanly", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (escrowReminderWorker) {
+    try {
+      await escrowReminderWorker.stop();
+    } catch (err) {
+      log.error("Failed to stop escrow reminder worker cleanly", {
         error: err instanceof Error ? err.message : String(err),
       });
     }

@@ -33,5 +33,8 @@
   "sms_auto_release_warning_body": "Delego: el depósito en garantía del pedido {{orderId}} (seguimiento {{trackingNumber}}) se liberará pronto al comercio. Si hay un problema con tu entrega, abre una disputa antes.",
 
   "sms_refund_processed_subject": "Reembolso procesado para el pedido {{orderId}}",
-  "sms_refund_processed_body": "Delego: el reembolso del pedido {{orderId}} (seguimiento {{trackingNumber}}) ha sido procesado."
+  "sms_refund_processed_body": "Delego: el reembolso del pedido {{orderId}} (seguimiento {{trackingNumber}}) ha sido procesado.",
+
+  "escrow_release_reminder_subject": "Recordatorio: confirma la recepción del pedido {{orderId}} en {{hours}} horas",
+  "escrow_release_reminder_body": "Tu pedido {{orderId}} de {{merchant}} se finalizará automáticamente el {{deadline}} (en unas {{hours}} horas) si no confirmas la recepción. Si todo llegó como esperabas, confírmalo ahora: {{confirmUrl}}\n\nSi hay algún problema con tu pedido, abre una disputa antes de esa fecha."
 }
