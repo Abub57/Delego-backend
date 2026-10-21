@@ -33,5 +33,8 @@
   "sms_auto_release_warning_body": "Delego: escrow for order {{orderId}} (tracking {{trackingNumber}}) will be released to the merchant soon. If there is a problem with your delivery, open a dispute before then.",
 
   "sms_refund_processed_subject": "Refund processed for order {{orderId}}",
-  "sms_refund_processed_body": "Delego: the refund for order {{orderId}} (tracking {{trackingNumber}}) has been processed."
+  "sms_refund_processed_body": "Delego: the refund for order {{orderId}} (tracking {{trackingNumber}}) has been processed.",
+
+  "escrow_release_reminder_subject": "Reminder: confirm receipt of order {{orderId}} within {{hours}} hours",
+  "escrow_release_reminder_body": "Your order {{orderId}} from {{merchant}} will be finalized automatically on {{deadline}} (about {{hours}} hours from now) if you have not confirmed receipt. If everything arrived as expected, please confirm now: {{confirmUrl}}\n\nIf there is a problem with your order, open a dispute before that time."
 }

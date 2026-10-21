@@ -375,6 +375,9 @@ importers:
       '@sendgrid/mail':
         specifier: ^8.1.4
         version: 8.1.6
+      bullmq:
+        specifier: ^5.78.1
+        version: 5.81.4
       cron-parser:
         specifier: ^5.10.0
         version: 5.10.0
