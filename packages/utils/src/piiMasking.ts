@@ -12,7 +12,9 @@
 
 export const PII_PATTERNS = {
   email: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-  phone: /\+?[1-9]\d{1,14}/g,
+  // Anchored to token boundaries: without them this also matched the digits
+  // inside identifiers such as "abc123" or "user_42", redacting non-PII.
+  phone: /(?<!\w)\+?[1-9]\d{1,14}(?!\w)/g,
   creditCard: /\b(?:\d[ -]*?){13,16}\b/g,
   // Stellar secret seeds: "S" followed by 55 base32 chars (56 chars total).
   stellarSecret: /S[A-Z0-9]{55}/g,
@@ -36,6 +38,19 @@ const PATTERN_ORDER: Array<keyof typeof PII_PATTERNS> = [
 export const PII_REDACTION_PLACEHOLDER = "[REDACTED]";
 
 /**
+ * Identifier shapes that carry no PII but contain digit groups which the
+ * broader patterns below would match: a UUID such as
+ * `c601569c-cb5d-4251-8f90-9f7782375020` has its `4251` group matched by
+ * `phone`, which mangles request ids / trace ids and breaks correlation
+ * between a log line and the request it describes. Such values are held
+ * aside while the patterns run and restored verbatim afterwards.
+ */
+const NON_PII_IDENTIFIER_PATTERN =
+  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+
+const IDENTIFIER_PLACEHOLDER_PATTERN = /\u0000(\d+)\u0000/g;
+
+/**
  * Replace any PII tokens (emails, phone numbers, credit card / bank
  * identifiers, Stellar secret keys) found in `content` with a redaction
  * placeholder. Non-string input is returned unchanged.
@@ -45,11 +60,19 @@ export function maskPii(content: string): string {
     return content;
   }
 
-  let masked = content;
+  const identifiers: string[] = [];
+  let masked = content.replace(NON_PII_IDENTIFIER_PATTERN, (identifier) => {
+    identifiers.push(identifier);
+    return `\u0000${identifiers.length - 1}\u0000`;
+  });
+
   for (const key of PATTERN_ORDER) {
     masked = masked.replace(PII_PATTERNS[key], PII_REDACTION_PLACEHOLDER);
   }
-  return masked;
+
+  return masked.replace(IDENTIFIER_PLACEHOLDER_PATTERN, (_match, index: string) =>
+    identifiers[Number(index)],
+  );
 }
 
 /**

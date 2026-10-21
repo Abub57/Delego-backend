@@ -42,7 +42,7 @@ export interface RunOptions {
  * the same sagaId — already-completed steps are skipped, which makes retries idempotent
  * and lets execution resume cleanly after an orchestrator crash.
  */
-export class SagaCoordinator<TContext extends Record<string, unknown>> {
+export class SagaCoordinator<TContext extends object> {
   private readonly steps: Map<string, SagaStep<TContext>>;
   private readonly stepOrder: string[];
   private readonly store: SagaStore;
@@ -91,7 +91,7 @@ export class SagaCoordinator<TContext extends Record<string, unknown>> {
       status: "running",
       currentStep: this.stepOrder[0] ?? null,
       completedSteps: [],
-      context: initialContext,
+      context: initialContext as Record<string, unknown>,
       version: 0,
       correlationId,
       error: null,
@@ -531,6 +531,6 @@ export class SagaCoordinator<TContext extends Record<string, unknown>> {
 
   /** Saves a record of this coordinator's TContext — store.save() is typed generically. */
   private save(record: SagaRecord<TContext>): Promise<SagaRecord<TContext>> {
-    return this.store.save(record) as Promise<SagaRecord<TContext>>;
+    return this.store.save(record as SagaRecord) as Promise<SagaRecord<TContext>>;
   }
 }

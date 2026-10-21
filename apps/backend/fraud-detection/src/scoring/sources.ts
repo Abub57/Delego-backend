@@ -14,7 +14,7 @@ export interface SqlQueryable {
   query(text: string, params: unknown[]): Promise<{ rows: unknown[] }>;
 }
 
-/** Reads merchant age and reputation from the `merchants` table (040_merchants). */
+/** Reads merchant age and reputation from the `merchants` table (055_merchants). */
 export class PostgresMerchantInfoSource implements MerchantInfoSource {
   constructor(private readonly db: SqlQueryable) {}
 

@@ -37,7 +37,15 @@ describe("oracle service (local signer)", () => {
 
   it("the signed payload hash matches the canonical payload hash", async () => {
     const receipt = await signDeliveryReceipt(baseInput);
-    const payload = buildCanonicalDeliveryPayload(baseInput);
+    // The signer's resolved public key is authoritative, so the expected
+    // payload is rebuilt from the receipt's own fields.
+    const payload = buildCanonicalDeliveryPayload({
+      escrowId: receipt.escrowId,
+      trackingNumber: receipt.trackingNumber,
+      carrier: receipt.carrier,
+      deliveredAt: receipt.deliveredAt,
+      oraclePublicKey: receipt.oraclePublicKey,
+    });
     expect(receipt.signedPayloadHash).toBe(canonicalPayloadHash(payload));
   });
 

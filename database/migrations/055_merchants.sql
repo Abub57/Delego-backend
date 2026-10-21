@@ -1,4 +1,4 @@
--- Migration: 040_merchants
+-- Migration: 055_merchants
 -- Issue: Merchant Registration and Store Management
 -- Description: Adds merchants table for merchant registration, store
 --              management, and on-chain verification status.

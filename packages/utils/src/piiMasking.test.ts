@@ -31,6 +31,11 @@ describe("maskPii", () => {
     expect(maskPii("order shipped successfully")).toBe("order shipped successfully");
   });
 
+  it("preserves UUID identifiers whose hex groups look like numbers", () => {
+    const requestId = "c601569c-cb5d-4251-8f90-9f7782375020";
+    expect(maskPii(`requestId=${requestId}`)).toBe(`requestId=${requestId}`);
+  });
+
   it("passes through non-string input unchanged", () => {
     // @ts-expect-error — exercising runtime guard against non-string input
     expect(maskPii(undefined)).toBeUndefined();

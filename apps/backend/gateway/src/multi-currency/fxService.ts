@@ -3,6 +3,7 @@ import { FXRate } from "../models/FXRate.js";
 import { SupportedCurrency } from "../models/SupportedCurrency.js";
 import type { FXRate as FXRateType, FXRateResponse, FXRateRequest } from "@delegolabs/types";
 import { fetchWithCorrelation } from "../../middleware/correlation.js";
+import { createChildLogger } from "../logger.js";
 
 /**
  * FX Rate Service
@@ -60,12 +61,12 @@ async function fetchFromProvider(provider: string, base: string, quote: string):
       ask,
     };
   } catch (error) {
-    log.error("Failed to fetch FX rate from provider", {
+    log.error({
       provider,
       base,
       quote,
       error: error instanceof Error ? error.message : String(error),
-    });
+    }, "Failed to fetch FX rate from provider");
     throw new Error(`FX rate fetch failed: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 }
@@ -259,11 +260,11 @@ export async function batchGetFXRates(pairs: Array<{ base: string; quote: string
       });
       rates.push(rate);
     } catch (error) {
-      log.error("Failed to get FX rate for currency pair", {
+      log.error({
         base: pair.base,
         quote: pair.quote,
         error: error instanceof Error ? error.message : String(error),
-      });
+      }, "Failed to get FX rate for currency pair");
     }
   }
 
@@ -285,11 +286,11 @@ export async function refreshAllFXRates(): Promise<void> {
             quoteCurrency: otherCurrency.code,
           });
         } catch (error) {
-          log.error("Failed to refresh FX rate", {
+          log.error({
             baseCurrency: currency.code,
             quoteCurrency: otherCurrency.code,
             error: error instanceof Error ? error.message : String(error),
-          });
+          }, "Failed to refresh FX rate");
         }
       }
     }

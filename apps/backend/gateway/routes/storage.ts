@@ -10,7 +10,7 @@ import { json, createLogger, route } from "@delegolabs/utils";
 import { generatePresignedUrl, checkStorageConfig } from "../src/storage/index.js";
 import { readJsonBody } from "../src/request.js";
 import { guardPermission } from "../middleware/requirePermission.js";
-import type { PresignedUrlRequest, PresignedUrlResponse } from "../src/storage/index.js";
+import type { PresignedUrlRequest } from "../src/storage/index.js";
 
 const log = createLogger("gateway:storage", process.env.LOG_LEVEL ?? "info");
 

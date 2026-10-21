@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { Pool, PoolClient } from "pg";
+import type { Pool } from "pg";
 import type { Logger } from "@delegolabs/utils";
 
 import {

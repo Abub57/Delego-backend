@@ -950,10 +950,8 @@ export function initQueue() {
       // instead of deadlocking indefinitely.
       lockDuration: DEFAULT_QUEUE_RETRY_CONFIG.lockDuration,
       lockRenewTime: DEFAULT_QUEUE_RETRY_CONFIG.lockRenewTime,
-      settings: {
-        maxStalledCount: 2,
-        stalledInterval: DEFAULT_QUEUE_RETRY_CONFIG.lockDuration,
-      },
+      maxStalledCount: 2,
+      stalledInterval: DEFAULT_QUEUE_RETRY_CONFIG.lockDuration,
     }
   );
 

@@ -1,7 +1,5 @@
 import { createLogger } from "@delegolabs/utils";
-import { escrowCoordinator } from "../escrowCoordinator/index.js";
 import { escrowService } from "../../escrow/index.js";
-import { submitContractCall } from "../../escrow/wallet-client.js";
 import { findPaymentRecordByEscrowId } from "../escrowCoordinator/paymentRecordStore.js";
 import { createPayoutRecord, toPayoutResponse } from "./store.js";
 import type { InitiatePayoutRequest, InitiatePayoutResponse, PlatformCommissionConfig, PayoutCalculation } from "./types.js";

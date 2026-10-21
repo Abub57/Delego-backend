@@ -356,7 +356,7 @@ function invalidField(field: string, message: string): ValidationError {
   };
 }
 
-function requireString(
+export function requireString(
   body: Record<string, unknown>,
   field: string
 ): ValidationResult<string> {
@@ -373,7 +373,7 @@ function requireString(
   return { ok: true, value: value.trim() };
 }
 
-function requireStellarAddress(
+export function requireStellarAddress(
   body: Record<string, unknown>,
   field: string
 ): ValidationResult<string> {

@@ -18,7 +18,7 @@
  *      Redis Stream so a second delivery is silently skipped rather than
  *      double-published.
  *
- * Backed by migration: database/migrations/040_soroban_event_sync_checkpoints.sql
+ * Backed by migration: database/migrations/059_soroban_event_sync_checkpoints.sql
  */
 
 import type { Pool } from "pg";

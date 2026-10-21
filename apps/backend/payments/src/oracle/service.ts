@@ -15,13 +15,12 @@
 
 import { createLogger } from "@delegolabs/utils";
 import { getEscrowContractId } from "../../escrow/config.js";
-import type { OracleKeySigner, OracleSignResult } from "./keyProvider.js";
 import { getOracleSigner } from "./config.js";
 import { buildCanonicalDeliveryPayload, canonicalPayloadHash } from "./payload.js";
+import { OracleSigningError } from "./types.js";
 import type {
   OracleDeliveryReceiptInput,
   OracleSignedDeliveryReceipt,
-  OracleSigningError,
   OracleSubmitReceiptResult,
 } from "./types.js";
 
@@ -42,11 +41,14 @@ export async function signDeliveryReceipt(
   input: OracleDeliveryReceiptInput,
   options: OracleSignOptions = {}
 ): Promise<OracleSignedDeliveryReceipt | OracleSubmitReceiptResult> {
-  const payload = buildCanonicalDeliveryPayload(input);
-  const payloadHash = canonicalPayloadHash(payload);
-
   const signer = getOracleSigner();
+  // The signer's resolved key is authoritative: it is what the receipt
+  // publishes, what verifiers reconstruct the payload from, and what the
+  // escrow contract is registered with. The request body's oraclePublicKey
+  // is deliberately ignored so receipts are self-verifiable.
   const publicKey = await signer.getPublicKey();
+  const payload = buildCanonicalDeliveryPayload({ ...input, oraclePublicKey: publicKey });
+  const payloadHash = canonicalPayloadHash(payload);
   const signatureBuf = await signer.sign(payload);
   const signature = signatureBuf.toString("hex");
 
@@ -72,7 +74,7 @@ export async function signDeliveryReceipt(
   });
 
   if (options.submitToContract) {
-    return submitSignedReceipt(receipt, signer);
+    return submitSignedReceipt(receipt);
   }
   return receipt;
 }
@@ -109,7 +111,7 @@ export async function verifyDeliveryReceipt(
     });
     return false;
   }
-  const { createVerify, createPublicKey } = await import("node:crypto");
+  const { verify: verifySignature, createPublicKey } = await import("node:crypto");
   let key: ReturnType<typeof createPublicKey>;
   try {
     key = createPublicKey({
@@ -124,10 +126,7 @@ export async function verifyDeliveryReceipt(
     });
     return false;
   }
-  const verify = createVerify("sha256");
-  verify.update(payload);
-  verify.end();
-  return verify.verify(key, signature);
+  return verifySignature(null, payload, key, signature);
 }
 
 /**
@@ -138,18 +137,9 @@ export async function verifyDeliveryReceipt(
  * the signature against its registered oracle public key before releasing.
  */
 async function submitSignedReceipt(
-  receipt: OracleSignedDeliveryReceipt,
-  signer: OracleKeySigner
+  receipt: OracleSignedDeliveryReceipt
 ): Promise<OracleSubmitReceiptResult> {
   const contractId = getEscrowContractId();
-  const payload = buildCanonicalDeliveryPayload({
-    escrowId: receipt.escrowId,
-    trackingNumber: receipt.trackingNumber,
-    carrier: receipt.carrier,
-    deliveredAt: receipt.deliveredAt,
-    oraclePublicKey: receipt.oraclePublicKey,
-  });
-  const signature = Buffer.from(receipt.signature, "hex");
 
   // Defer the contract-client import so the oracle service can be used
   // standalone (e.g. for key management) without a configured wallet.

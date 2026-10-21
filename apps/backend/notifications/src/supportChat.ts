@@ -52,7 +52,6 @@
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
 import { Redis } from "ioredis";
-import { randomUUID } from "node:crypto";
 import jwt from "jsonwebtoken";
 import { createLogger } from "@delegolabs/utils";
 
@@ -325,7 +324,7 @@ export class ChatRelay {
   private readonly logStore: ChatLogStore;
   private readonly jwtSecret: string;
 
-  constructor(private readonly options: ChatRelayOptions = {}) {
+  constructor(options: ChatRelayOptions = {}) {
     const secret =
       options.jwtSecret ??
       process.env.JWT_SECRET ??

@@ -1,11 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Op, Transaction } from "sequelize";
+import { Op, type Transaction } from "sequelize";
 import type { Route } from "@delegolabs/utils";
 import { route, createLogger } from "@delegolabs/utils";
 import { extractAuth } from "../../middleware/auth.js";
 import { validateSchema, CreateProductVariantSchema, UpdateProductVariantStockSchema } from "../../src/validation.js";
 import { readJsonBody, InvalidJsonError, BodyTooLargeError } from "../../src/request.js";
-import { badRequest, notFound, unauthorized, forbidden, sendApiError, success } from "../../src/errors.js";
+import { badRequest, notFound, unauthorized, forbidden, sendApiError } from "../../src/errors.js";
 import { sequelize } from "../../src/db.js";
 import { Merchant, Product, ProductVariant } from "../../src/models/index.js";
 
@@ -23,19 +23,6 @@ function formatVariantResponse(variant: ProductVariant): Record<string, unknown>
     createdAt: variant.createdAt.toISOString(),
     updatedAt: variant.updatedAt.toISOString(),
   };
-}
-
-async function requireProductOwnership(
-  userId: string,
-  productId: string,
-): Promise<{ product: Product; merchant: Merchant } | null> {
-  const product = await Product.findByPk(productId, {
-    include: [{ model: Merchant, as: "merchant" }],
-  });
-  if (!product) return null;
-  const merchant = (product as any).merchant as Merchant;
-  if (merchant.ownerUserId !== userId) return null;
-  return { product, merchant };
 }
 
 /**
@@ -166,13 +153,14 @@ export async function listVariantsHandler(
       return;
     }
 
-    const whereClause: Record<string, unknown> = { productId };
+    const whereClause: Record<string | symbol, unknown> = { productId };
     
     // Add JSONB attribute filtering if specified
     if (Object.keys(attributeFilters).length > 0) {
       for (const [key, value] of Object.entries(attributeFilters)) {
+        const existing = whereClause[Op.and];
         whereClause[Op.and] = [
-          ...(Array.isArray(whereClause[Op.and]) ? whereClause[Op.and] : []),
+          ...(Array.isArray(existing) ? existing : []),
           { attributes: { [key]: value } },
         ];
       }
@@ -329,7 +317,7 @@ export async function updateVariantStockHandler(
       error: null,
     }));
   } catch (err: any) {
-    if (!transaction.finished) {
+    if (!(transaction as Transaction & { finished?: string }).finished) {
       await transaction.rollback();
     }
     if (err instanceof InvalidJsonError || err instanceof BodyTooLargeError) {

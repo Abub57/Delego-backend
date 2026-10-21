@@ -23,6 +23,7 @@ import { startMetricsSampling, adaptiveRateLimitingMiddleware } from "./rateLimi
 import { sequelize, initializeDbMetrics } from "./db.js";
 import { withSentryMiddleware, withSentryRoutes } from "./observability/sentryRequest.js";
 import { startBulkCatalogImportWorker } from "./catalog/bulkImport/queue.js";
+import { validateRequest } from "./middleware/validateRequest.js";
 
 const SERVICE_NAME = "gateway";
 const DEFAULT_PORT = 3000;
@@ -46,7 +47,7 @@ if (sentryConfig) {
 
 const port = Number(process.env.GATEWAY_PORT ?? DEFAULT_PORT);
 
-logger.info("Starting gateway", { port, nodeEnv, logLevel });
+logger.info({ port, nodeEnv, logLevel }, "Starting gateway");
 
 // Start emergency kill-switch subscriber
 getEmergencyKillSwitchService().start().catch((err) => {
@@ -77,7 +78,7 @@ const server = startHttpServer({
     requestIdMiddleware(),
     corsMiddleware(),
     securityHeadersMiddleware(),
-    killSwitchMiddleware(),
+    killSwitchMiddleware() as unknown as Middleware,
     raspMiddleware(),
     // Version negotiation must run before auth and rate-limiting so that
     // sunset versions get 410 Gone before any further processing.
@@ -88,7 +89,7 @@ const server = startHttpServer({
     openApiValidationMiddleware({
       validateResponses: process.env.GATEWAY_VALIDATE_RESPONSES === "true",
     }),
-    adaptiveRateLimitingMiddleware(),
+    adaptiveRateLimitingMiddleware() as unknown as Middleware,
     rateLimitMiddleware(),
     // Deduplicates retried mutations (Issue #380): must wrap route handlers,
     // so it runs after auth/rate-limiting and before response capture points.

@@ -94,7 +94,7 @@ of the few that can take a table offline, so the executor is defensive:
 
 Attempt and run history are held in a bounded in-memory window (500 entries), so
 memory cannot grow without limit. A durable per-table audit trail is written to
-`db_vacuum_run_log` (migration `database/migrations/040_db_vacuum_run_log.sql`)
+`db_vacuum_run_log` (migration `database/migrations/052_db_vacuum_run_log.sql`)
 when the service has a database; a storage failure is logged and never fails an
 otherwise successful run.
 

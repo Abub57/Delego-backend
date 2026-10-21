@@ -14,7 +14,7 @@
  *     with it and so callers can verify receipts.
  */
 
-import type { IncomingMessage } from "node:/http";
+import type { IncomingMessage } from "node:http";
 import { json, readBodyWithLimit, route, type Route } from "@delegolabs/utils";
 import { getOracleSigner } from "./config.js";
 import { signDeliveryReceipt, verifyDeliveryReceipt } from "./service.js";

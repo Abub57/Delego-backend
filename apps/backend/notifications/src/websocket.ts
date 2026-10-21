@@ -9,7 +9,7 @@ import {
   WebSocketStallMonitor,
   type WebSocketMonitorConfig,
 } from "@delegolabs/utils";
-import { getSubscriberClient, publishNotification } from "./redis/client.js";
+import { getSubscriberClient } from "./redis/client.js";
 
 const SERVICE_NAME = "notifications";
 const log = createLogger(SERVICE_NAME, process.env.LOG_LEVEL ?? "info");

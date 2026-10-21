@@ -9,7 +9,6 @@ import {
   startHttpServer,
   tracedFetch,
   initTelemetry,
-  createHealthRoutes,
   corsMiddleware,
   securityHeadersMiddleware,
   requireAuth,
@@ -568,7 +567,15 @@ async function main(): Promise<void> {
 
         try {
           const sagaId = `checkout:${input.orderId}`;
-          const workflowInput = createCheckoutWorkflowInput(input, authenticatedUserId);
+          const workflowInput = createCheckoutWorkflowInput(
+            {
+              orderId: input.orderId,
+              sourceAddress: input.sourceAddress,
+              buyerAddress: input.buyerAddress,
+              sellerAddress: input.sellerAddress,
+            },
+            authenticatedUserId,
+          );
           const result = await checkoutWorkflow(workflowInput, checkoutSagaCoordinator, sagaId);
           json(res, result.status === "completed" || result.status === "compensated" ? 200 : 502, {
             data: serializeSagaExecution(result),

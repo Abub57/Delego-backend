@@ -14,7 +14,6 @@
 import { HealthRegistry, httpHealthCheck, type HealthCheckFn, type ServiceHealth } from "@delegolabs/utils";
 import { checkDatabaseHealth } from "./db.js";
 import { getRedisHealth, type RedisHealth } from "./rateLimit/redisClient.js";
-import { fetchWithCorrelation } from "../middleware/correlation.js";
 
 const SERVICE_URLS = {
   orchestrator: process.env.ORCHESTRATOR_SERVICE_URL ?? "http://localhost:3013",

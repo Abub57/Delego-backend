@@ -1,4 +1,4 @@
-import { Model, DataTypes, type Sequelize } from "sequelize";
+import { Model, DataTypes, type Sequelize, type InitOptions } from "sequelize";
 import { sequelize } from "../db.js";
 
 export type ReviewStatus = "visible" | "hidden";
@@ -137,7 +137,7 @@ export function initReview(sequelizeInstance: Sequelize): void {
           where: sequelizeInstance.literal("rating >= 1 AND rating <= 5"),
         },
       ],
-    }
+    } as InitOptions<Review>
   );
 }
 

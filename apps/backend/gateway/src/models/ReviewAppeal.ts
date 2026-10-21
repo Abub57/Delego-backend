@@ -1,4 +1,4 @@
-import { Model, DataTypes, type Sequelize } from "sequelize";
+import { Model, DataTypes, type Sequelize, type InitOptions } from "sequelize";
 import { sequelize } from "../db.js";
 
 export type AppealReasonCategory = "spam" | "abusive" | "unrelated" | "fraudulent";
@@ -128,7 +128,7 @@ export function initReviewAppeal(sequelizeInstance: Sequelize): void {
           name: "unique_appeal_per_review",
         },
       ],
-    }
+    } as InitOptions<ReviewAppeal>
   );
 }
 

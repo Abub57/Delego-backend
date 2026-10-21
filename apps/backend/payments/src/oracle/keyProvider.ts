@@ -13,11 +13,10 @@
  */
 
 import * as crypto from "node:crypto";
-import { createPublicKey, createSign, createVerify, type KeyObject } from "node:crypto";
-import { createLogger } from "@delegolabs/utils";
-import type { OracleKeyProvider, OracleKeyProviderConfig } from "./types.js";
+import { createPrivateKey, createPublicKey, type KeyObject } from "node:crypto";
+import type { OracleKeyProvider } from "./types.js";
 
-const log = createLogger("payments:oracle:key-provider", process.env.LOG_LEVEL ?? "info");
+export type { OracleKeyProvider } from "./types.js";
 
 /** The Ed25519 curve identifier used by the oracle. */
 export const ORACLE_KEY_ALGORITHM = "ed25519" as const;
@@ -98,19 +97,12 @@ export class LocalOracleKeySigner implements OracleKeySigner {
   }
 
   async sign(payload: Buffer): Promise<Buffer> {
-    const sign = createSign("sha256");
-    sign.update(payload);
-    sign.end();
-    return sign.sign(this.keyObject);
+    // Ed25519 is only supported by the one-shot API — the streaming
+    // Sign/Verify classes reject it with "Unsupported crypto operation".
+    return crypto.sign(null, payload, this.keyObject);
   }
 
   async verify(payload: Buffer, signature: Buffer): Promise<boolean> {
-    const verify = createVerify("sha256");
-    verify.update(payload);
-    verify.end();
-    return verify.verify(
-      { key: createPublicKey(this.keyObject), format: "der", type: "spki" },
-      signature
-    );
+    return crypto.verify(null, payload, createPublicKey(this.keyObject), signature);
   }
 }

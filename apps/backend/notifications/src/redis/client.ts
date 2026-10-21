@@ -231,16 +231,33 @@ async function flushNotificationBuffer(client: Redis): Promise<void> {
 }
 
 /**
+ * True when the process is a test run of any flavour.  Lives in one place so
+ * the client factory and the lazy getters agree on when the in-memory mock is
+ * in effect.
+ */
+function isTestEnvironment(): boolean {
+  return (
+    process.env.NODE_ENV === "test" ||
+    process.env.MOCK_REDIS === "true" ||
+    process.env.CI === "true" ||
+    Object.keys(process.env).some(k => k.includes('TEST'))
+  );
+}
+
+/**
+ * Resilience specs replace the `ioredis` module with a fake so they can drive
+ * connection events themselves; they opt in with
+ * `REDIS_TEST_CLIENT=injected`.  Every other test keeps the in-memory mock.
+ */
+function usesInjectedTestClient(): boolean {
+  return process.env.REDIS_TEST_CLIENT === "injected";
+}
+
+/**
  * Create a Redis client with resilience configuration
  */
 function createRedisClient(clientType: string, lazyConnect: boolean = false): Redis {
-  const isTest = 
-    process.env.NODE_ENV === "test" || 
-    process.env.MOCK_REDIS === "true" || 
-    process.env.CI === "true" ||
-    Object.keys(process.env).some(k => k.includes('TEST'));
-
-  if (isTest) {
+  if (isTestEnvironment() && !usesInjectedTestClient()) {
     log.info(`Using mock Redis connection for ${clientType} client`);
     const require = createRequire(import.meta.url);
     const MockRedisConstructor = require("ioredis-mock");
@@ -263,9 +280,7 @@ function createRedisClient(clientType: string, lazyConnect: boolean = false): Re
     retryStrategy,
     enableOfflineQueue: true, // Queue commands while disconnected
     enableReadyCheck: true,
-    connectTimeout: 10000,
-    // Prevent connection errors from throwing unhandled rejections
-    lazyConnect: lazyConnect
+    connectTimeout: 10000
   });
 
   attachEventListeners(client, clientType);
@@ -274,18 +289,30 @@ function createRedisClient(clientType: string, lazyConnect: boolean = false): Re
 }
 
 /**
+ * Eagerly connect a freshly created client.  Suites that inject their own
+ * `ioredis` fake drive the connection lifecycle themselves, so their clients
+ * stay idle until the suite calls `connect()`.
+ */
+function connectUnlessInjected(client: Redis, clientType: string): void {
+  if (usesInjectedTestClient()) {
+    return;
+  }
+
+  // Connect explicitly if not lazy
+  client.connect().catch(err => {
+    log.error(`Failed to connect ${clientType} client`, {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
+}
+
+/**
  * Get or create the Redis publisher client (for publishing notifications)
  */
 export function getPublisherClient(): Redis {
   if (!publisherClient) {
     publisherClient = createRedisClient("publisher", true);
-    
-    // Connect explicitly if not lazy
-    publisherClient.connect().catch(err => {
-      log.error("Failed to connect publisher client", {
-        error: err instanceof Error ? err.message : String(err)
-      });
-    });
+    connectUnlessInjected(publisherClient, "publisher");
   }
   return publisherClient;
 }
@@ -296,13 +323,7 @@ export function getPublisherClient(): Redis {
 export function getSubscriberClient(): Redis {
   if (!subscriberClient) {
     subscriberClient = createRedisClient("subscriber", true);
-    
-    // Connect explicitly if not lazy
-    subscriberClient.connect().catch(err => {
-      log.error("Failed to connect subscriber client", {
-        error: err instanceof Error ? err.message : String(err)
-      });
-    });
+    connectUnlessInjected(subscriberClient, "subscriber");
   }
   return subscriberClient;
 }
@@ -313,13 +334,7 @@ export function getSubscriberClient(): Redis {
 export function getDispatcherClient(): Redis {
   if (!dispatcherClient) {
     dispatcherClient = createRedisClient("dispatcher", true);
-    
-    // Connect explicitly if not lazy
-    dispatcherClient.connect().catch(err => {
-      log.error("Failed to connect dispatcher client", {
-        error: err instanceof Error ? err.message : String(err)
-      });
-    });
+    connectUnlessInjected(dispatcherClient, "dispatcher");
   }
   return dispatcherClient;
 }

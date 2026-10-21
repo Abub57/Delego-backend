@@ -67,17 +67,19 @@ export function getOracleSigner(): OracleKeySigner {
   const config = getOracleSignerConfig();
   log.info("Initializing oracle signer", { provider: config.provider, keyId: config.keyId });
 
+  let signer: OracleKeySigner;
+
   switch (config.provider) {
     case "local": {
       const keyId = config.keyId ?? `oracle-local-${Date.now().toString(36)}`;
-      cachedSigner = new LocalOracleKeySigner(keyId);
+      signer = new LocalOracleKeySigner(keyId);
       break;
     }
     case "aws_kms": {
       if (!config.keyId) {
         throw new Error("ORACLE_KEY_ID is required for the aws_kms oracle provider");
       }
-      cachedSigner = new AwsKmsOracleKeySigner({
+      signer = new AwsKmsOracleKeySigner({
         keyId: config.keyId,
         region: config.region,
       });
@@ -87,7 +89,7 @@ export function getOracleSigner(): OracleKeySigner {
       if (!config.keyId) {
         throw new Error("ORACLE_KEY_ID is required for the vault oracle provider");
       }
-      cachedSigner = new VaultOracleKeySigner({
+      signer = new VaultOracleKeySigner({
         keyId: config.keyId,
         addr: config.vaultAddr,
         token: config.vaultToken,
@@ -100,7 +102,8 @@ export function getOracleSigner(): OracleKeySigner {
     }
   }
 
-  return cachedSigner;
+  cachedSigner = signer;
+  return signer;
 }
 
 /** Reset the cached signer (used by tests). */

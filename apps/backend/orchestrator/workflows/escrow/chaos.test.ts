@@ -5,11 +5,15 @@ import type { EscrowSagaContext } from "@delegolabs/types";
 import { getInventoryReservationService } from "../../src/inventory/reservation.js";
 
 vi.mock("../../src/inventory/reservation.js", () => {
+  // The steps resolve the service on every execute/compensate, so the mock has
+  // to hand back the same instance — otherwise the spies asserted on below are
+  // never the ones the coordinator actually calls.
+  const service = {
+    reserve: vi.fn().mockResolvedValue(undefined),
+    release: vi.fn().mockResolvedValue(undefined),
+  };
   return {
-    getInventoryReservationService: vi.fn(() => ({
-      reserve: vi.fn().mockResolvedValue(undefined),
-      release: vi.fn().mockResolvedValue(undefined),
-    })),
+    getInventoryReservationService: vi.fn(() => service),
   };
 });
 
@@ -58,13 +62,16 @@ describe("Escrow Saga Chaos Testing", () => {
     services.submitSorobanEscrow = vi.fn().mockRejectedValue(new Error("Soroban RPC timeout"));
 
     const coordinator = createEscrowSagaCoordinator(store, services);
-    
-    await expect(coordinator.run(
+
+    // The coordinator compensates and returns the terminal record; it does not throw.
+    const result = await coordinator.run(
       "saga_1",
       "order_1",
       createInitialContext(),
       { workflowType: "checkout", correlationId: "corr_1" }
-    )).rejects.toThrow("Soroban RPC timeout");
+    );
+    expect(result.status).toBe("compensated");
+    expect(result.error).toBe("Soroban RPC timeout");
 
     const state = await store.get("saga_1");
     expect(state?.status).toBe("compensated");
@@ -79,13 +86,15 @@ describe("Escrow Saga Chaos Testing", () => {
     services.recordOrderDb = vi.fn().mockRejectedValue(new Error("Database connection lost"));
 
     const coordinator = createEscrowSagaCoordinator(store, services);
-    
-    await expect(coordinator.run(
+
+    const result = await coordinator.run(
       "saga_1",
       "order_1",
       createInitialContext(),
       { workflowType: "checkout", correlationId: "corr_1" }
-    )).rejects.toThrow("Database connection lost");
+    );
+    expect(result.status).toBe("compensated");
+    expect(result.error).toBe("Database connection lost");
 
     const state = await store.get("saga_1");
     expect(state?.status).toBe("compensated");
@@ -120,7 +129,12 @@ describe("Escrow Saga Chaos Testing", () => {
       ],
       context: {
         ...createInitialContext(),
-        payload: { escrowId: "escrow_chaos_123" }
+        // reserve_stock's compensation only releases when the context still
+        // carries the reserved items, so the crash snapshot must keep both.
+        payload: {
+          items: [{ sku: "item1", quantity: 1 }],
+          escrowId: "escrow_chaos_123",
+        },
       },
       version: 1,
       correlationId: "corr_chaos",
@@ -134,17 +148,17 @@ describe("Escrow Saga Chaos Testing", () => {
     // Make DB fail again upon recovery to trigger compensation
     services.recordOrderDb = vi.fn().mockRejectedValue(new Error("DB still down"));
     const coordinator = createEscrowSagaCoordinator(store, services);
-    
-    // Coordinator resume logic - we need to manually trigger run for existing saga to simulate resume or 
-    // if the coordinator has a resume method, we use that.
-    // In SagaCoordinator, `run` on an existing saga checks if it can resume.
-    
-    await expect(coordinator.run(
+
+    // run() on an existing saga resumes from its persisted state and compensates
+    // the completed steps when the outstanding step fails again.
+    const result = await coordinator.run(
       "saga_chaos",
       "order_1",
       createInitialContext(),
       { workflowType: "checkout", correlationId: "corr_chaos" }
-    )).rejects.toThrow("DB still down");
+    );
+    expect(result.status).toBe("compensated");
+    expect(result.error).toBe("DB still down");
 
     const recoveredState = await store.get("saga_chaos");
     expect(recoveredState?.status).toBe("compensated"); 

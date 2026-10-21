@@ -255,6 +255,12 @@ export async function printLogChunkBenchmark(
 }
 
 // Run directly: `pnpm --filter @delegolabs/utils ts-benchmark:log-chunks`
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await printLogChunkBenchmark();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // Deliberately not top-level `await`: that marks this whole ESM graph async,
+  // which makes `require("@delegolabs/utils")` fail in CommonJS consumers.
+  printLogChunkBenchmark().catch((error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

@@ -113,6 +113,12 @@ describe("WorkflowEventStore", () => {
       oldRecord.recordedAt = new Date(Date.now() - 60 * 60 * 1000);
       await store.record(oldRecord);
 
+      // Capture the cutoff before recording the newer event: using `new Date()`
+      // after it would put the cutoff *after* that event's `recordedAt` and
+      // remove both, so the assertion otherwise only held when both calls
+      // landed in the same millisecond.
+      const cutoff = new Date();
+
       await store.record(createWorkflowEventRecord({
         workflowId: "wf-1",
         eventType: "SPEND_APPROVED",
@@ -121,7 +127,7 @@ describe("WorkflowEventStore", () => {
         toState: "UserApprovalPending",
       }));
 
-      const removed = await store.cleanup(new Date());
+      const removed = await store.cleanup(cutoff);
       expect(removed).toBe(1);
 
       const remaining = await store.getEvents("wf-1");

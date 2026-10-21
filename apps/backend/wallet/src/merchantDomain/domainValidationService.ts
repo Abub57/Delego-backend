@@ -109,8 +109,12 @@ const NON_PUBLIC_ADDRESSES = (() => {
   ] as const) {
     list.addSubnet(net, prefix, "ipv4");
   }
+  // No `::ffff:0:0/96` entry: `BlockList` normalises IPv4-mapped IPv6 addresses
+  // to IPv4 internally, so that subnet collapses to `0.0.0.0/0` and reports
+  // every IPv4 address (including public ones) as blocked. Mapped addresses are
+  // already matched against the IPv4 rules above.
   for (const [net, prefix] of [
-    ["::", 128], ["::1", 128], ["::ffff:0:0", 96], ["64:ff9b::", 96], ["100::", 64],
+    ["::", 128], ["::1", 128], ["64:ff9b::", 96], ["100::", 64],
     ["2001:db8::", 32], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8],
   ] as const) {
     list.addSubnet(net, prefix, "ipv6");

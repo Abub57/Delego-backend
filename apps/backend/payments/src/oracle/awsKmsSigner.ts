@@ -12,10 +12,7 @@
  * is imported lazily so the rest of the payments service boots without it.
  */
 
-import { createLogger } from "@delegolabs/utils";
-import type { OracleKeyProvider, OracleKeySigner, OraclePublicKey } from "./keyProvider.js";
-
-const log = createLogger("payments:oracle:aws-kms", process.env.LOG_LEVEL ?? "info");
+import type { OracleKeySigner, OraclePublicKey } from "./keyProvider.js";
 
 type KmsSignerCtor = {
   region?: string;
@@ -70,17 +67,15 @@ interface GetPublicKeyResponse {
 export class AwsKmsOracleKeySigner implements OracleKeySigner {
   readonly provider = "aws_kms" as const;
   private readonly region: string | undefined;
-  private readonly keyId: string;
   private readonly _keyId: string;
   private publicKeyCache: OraclePublicKey | null = null;
-  private clientPromise: Promise<KmsSdkModule["KMSClient"]> | null = null;
+  private clientPromise: Promise<InstanceType<KmsSdkModule["KMSClient"]>> | null = null;
 
   constructor(config: KmsSignerCtor) {
     if (!config.keyId || typeof config.keyId !== "string" || !config.keyId.trim()) {
       throw new Error("AWS KMS keyId (alias or ARN) is required");
     }
-    this.keyId = config.keyId.trim();
-    this._keyId = this.keyId;
+    this._keyId = config.keyId.trim();
     this.region = config.region;
   }
 
@@ -88,7 +83,7 @@ export class AwsKmsOracleKeySigner implements OracleKeySigner {
     return this._keyId;
   }
 
-  private async client(): Promise<KmsSdkModule["KMSClient"]> {
+  private async client(): Promise<InstanceType<KmsSdkModule["KMSClient"]>> {
     if (!this.clientPromise) {
       const sdk = await loadKmsSdk();
       this.clientPromise = Promise.resolve(

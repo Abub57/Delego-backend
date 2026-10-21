@@ -27,7 +27,7 @@ describe.skipIf(!databaseUrl)("spend metrics PostgreSQL integration", () => {
     // an isolated schema; never clear the developer's application tables.
     for (const file of [
       "schema/001_initial.sql", "migrations/009_payment_records.sql",
-      "migrations/016_disputes.sql", "migrations/040_merchants.sql",
+      "migrations/016_disputes.sql", "migrations/055_merchants.sql",
       "migrations/043_spend_metrics.sql",
     ]) {
       await db.query(await readFile(new URL(`../../../../../database/${file}`, import.meta.url), "utf8"));

@@ -75,7 +75,7 @@ export interface ChatServiceConfig {
   ) => LLMStreamGenerator;
 }
 
-const defaultStreamProvider: ChatServiceConfig["streamProvider"] = function* defaultStream() {
+const defaultStreamProvider: ChatServiceConfig["streamProvider"] = async function* defaultStream() {
   return;
 };
 

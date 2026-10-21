@@ -1,11 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Op } from "sequelize";
 import type { Route } from "@delegolabs/utils";
-import { route, createLogger, validatePublicKey } from "@delegolabs/utils";
+import { route, createLogger } from "@delegolabs/utils";
 import { extractAuth } from "../../middleware/auth.js";
 import { validateSchema, ReviewSubmissionSchema, ReviewAppealSchema, ReviewModerationSchema } from "../../src/validation.js";
 import { readJsonBody, InvalidJsonError, BodyTooLargeError } from "../../src/request.js";
-import { badRequest, notFound, unauthorized, forbidden, sendApiError, success } from "../../src/errors.js";
+import { badRequest, notFound, unauthorized, forbidden, sendApiError } from "../../src/errors.js";
 import { Merchant, Product, Review, ReviewAppeal, PaymentRecord } from "../../src/models/index.js";
 
 const log = createLogger("gateway:reviews", process.env.LOG_LEVEL ?? "info");
@@ -136,11 +136,6 @@ export async function submitReviewHandler(
         "A review has already been submitted for this order", req);
       return;
     }
-
-    // Get product to link review
-    const product = await Product.findByPk(body.productId || paymentRecord.orderId, {
-      attributes: ["id"],
-    });
 
     const review = await Review.create({
       orderId,

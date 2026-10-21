@@ -4,7 +4,7 @@
  *
  * The in-memory store is the default so the service and its tests run without
  * a database; the PostgreSQL store persists to `db_vacuum_run_log` (see
- * `database/migrations/040_db_vacuum_run_log.sql`).
+ * `database/migrations/052_db_vacuum_run_log.sql`).
  */
 import type { VacuumRunRecord, VacuumRunSummary } from "@delegolabs/types";
 import type { Queryable } from "../bloat/statsQuery.js";

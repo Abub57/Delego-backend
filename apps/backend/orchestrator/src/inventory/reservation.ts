@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { Redis } from "ioredis";
 import Redlock from "redlock";
 import {
@@ -83,7 +83,7 @@ export class InventoryReservationService {
       (item) => `inventory:${item.merchantId}:${item.productId}`,
     ))];
     const lock = await this.redlock.acquire(resources, 10_000);
-    let client: Awaited<ReturnType<Pool["connect"]>> | undefined;
+    let client: PoolClient | undefined;
     const levels = new Map<string, InventoryLevel>();
 
     try {
@@ -150,7 +150,7 @@ export class InventoryReservationService {
       }
       await client.query("COMMIT");
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client?.query("ROLLBACK");
       if (isUniqueViolation(error)) {
         const item = orderedItems.find((candidate) => candidate.orderId);
         throw new DuplicateReservationError(item?.orderId ?? "unknown", item?.productId ?? "unknown");

@@ -1,4 +1,4 @@
--- Migration: 038_column_encryption
+-- Migration: 049_column_encryption
 -- Description: Column-level encryption for PII data at rest (Issue #68).
 -- Tracks data-encryption-key versions across rotations (zero-downtime dual
 -- encryption) and provides an append-only audit table for key access

@@ -15,8 +15,8 @@
  * Either all of that lands or none of it does, so a worker taken offline at
  * any instant resumes from exactly the last committed ledger.
  *
- * Backed by migrations 040_soroban_event_sync_checkpoints.sql and
- * 046_soroban_contract_events.sql.
+ * Backed by migrations 059_soroban_event_sync_checkpoints.sql and
+ * 062_soroban_contract_events.sql.
  */
 
 import type { Pool, PoolClient } from "pg";
