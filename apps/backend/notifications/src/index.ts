@@ -52,6 +52,8 @@ import {
   initSupportChatServer,
   getChatRedisClient,
 } from "./supportChat.js";
+import { startRestockWorker } from "./restock/worker.js";
+import { startLowStockWorker } from "./lowStock/worker.js";
 
 const SERVICE_NAME = "notifications";
 const DEFAULT_PORT = 3015;
@@ -125,6 +127,17 @@ if (rpcUrl && escrowContractId) {
   log.info(
     "Escrow event listener disabled (set STELLAR_RPC_URL and ESCROW_CONTRACT_ID to enable)"
   );
+}
+
+// BullMQ workers: restock waitlist notifications and low-stock merchant alerts.
+const backgroundWorkers: Array<{ name: string; close(): Promise<void> }> = [];
+if (process.env.NODE_ENV !== "test") {
+  if (process.env.ENABLE_RESTOCK_WORKER !== "false") {
+    backgroundWorkers.push({ name: "restock-waitlist", ...startRestockWorker() });
+  }
+  if (process.env.ENABLE_LOW_STOCK_WORKER !== "false") {
+    backgroundWorkers.push({ name: "low-stock-alerts", ...startLowStockWorker() });
+  }
 }
 
 const server: Server = startHttpServer({
@@ -682,7 +695,17 @@ async function gracefulShutdown(signal: NodeJS.Signals): Promise<void> {
       });
     }
   }
-  
+  for (const worker of backgroundWorkers) {
+    try {
+      await worker.close();
+    } catch (err) {
+      log.error("Failed to stop background worker cleanly", {
+        worker: worker.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   // Gracefully disconnect Redis clients
   try {
     await disconnectRedis();

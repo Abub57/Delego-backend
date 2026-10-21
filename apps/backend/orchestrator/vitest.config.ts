@@ -18,6 +18,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@delegolabs/cache": path.resolve(root, "../../../packages/cache/src/index.ts"),
+      "@delegolabs/types": path.resolve(root, "../../../packages/types/src/index.ts"),
     },
   },
 });

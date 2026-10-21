@@ -47,6 +47,11 @@ import { PostgresTaskStore, tasksSequelize, TaskService, TaskEventBroker } from 
 import { createTaskRoutes } from "./tasks/routes.js";
 import { DLQStore, DLQService, createDLQRoutes } from "./dlq/index.js";
 import type { ConnectionOptions } from "bullmq";
+import {
+  IdempotencyStore,
+  createCheckoutIdempotencyPreHandler,
+  type IdempotencyRedis,
+} from "./idempotency/index.js";
 
 const SERVICE_NAME = "orchestrator";
 const DEFAULT_PORT = 3010;
@@ -73,6 +78,19 @@ let checkoutSagaCoordinator: SagaCoordinator<CheckoutContext> = createCheckoutSa
 const outboxPool = new Pool({ connectionString: process.env.DATABASE_URL });
 setServiceEventOutboxStore(new PostgresServiceEventOutboxStore(outboxPool));
 let outboxRelay: OutboxRelayHandle | null = null;
+
+// ─── Checkout Idempotency ────────────────────────────────────────────────────
+// Collapses retried / double-submitted checkouts onto a single execution using
+// a Redis SET NX EX lease per request fingerprint; duplicates replay the
+// original response verbatim.
+const checkoutIdempotency = createCheckoutIdempotencyPreHandler({
+  store: new IdempotencyStore(
+    new Redis(process.env.REDIS_URL ?? "redis://localhost:6379", {
+      lazyConnect: true,
+      maxRetriesPerRequest: 1,
+    }) as unknown as IdempotencyRedis,
+  ),
+});
 
 // ─── Human Task Management ─────────────────────────────────────────────────
 // Durable store backed by human_tasks (database/migrations/027_human_tasks.sql),
@@ -539,6 +557,14 @@ async function main(): Promise<void> {
           });
           return;
         }
+
+        const idempotency = await checkoutIdempotency(req, res, {
+          userId: authenticatedUserId,
+          walletAddress: input.buyerAddress,
+          items: body.items ?? body.inventoryItems ?? [],
+          nonce: typeof body.nonce === "string" ? body.nonce : input.orderId,
+        });
+        if (idempotency === "replied") return;
 
         try {
           const sagaId = `checkout:${input.orderId}`;

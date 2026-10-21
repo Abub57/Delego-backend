@@ -58,4 +58,5 @@ export * from "./container-digest.js";
 export * from "./dlq.js";
 export * from "./storage.js";
 export * from "./feeEstimator.js";
+export * from "./inventory-alerts.js";
 export * from "./inventory.js";

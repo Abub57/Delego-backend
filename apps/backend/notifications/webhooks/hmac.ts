@@ -29,7 +29,12 @@ export const WEBHOOK_SIGNATURE_PREVIOUS_HEADER = "X-Delego-Signature-Previous";
  */
 export interface WebhookPayload<T = unknown> {
   id: string; // event id
-  event: "order.created" | "escrow.funded" | "escrow.released" | "dispute.opened";
+  event:
+    | "order.created"
+    | "escrow.funded"
+    | "escrow.released"
+    | "dispute.opened"
+    | "inventory.low_stock";
   timestamp: string;
   data: T;
 }

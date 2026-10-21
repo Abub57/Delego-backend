@@ -119,6 +119,8 @@ import { registerCatalogRoutes } from "../src/catalog/routes.js";
 import { registerVariantRoutes } from "../src/catalog/variants.js";
 import { registerReviewRoutes } from "../src/catalog/reviews.js";
 import { registerDeliveryEvidenceRoutes } from "../src/catalog/deliveryEvidence.js";
+import { registerWaitlistRoutes } from "../src/waitlist/routes.js";
+import { registerBulkCatalogImportRoutes } from "../src/catalog/bulkImport/routes.js";
 import { registerAgentChatRoutes } from "./agentChat.js";
 import { registerMetricsRoutes } from "../src/metrics.js";
 import {
@@ -301,6 +303,10 @@ export function registerRoutes(): Route[] {
     ...registerReviewRoutes(),
     // Delivery evidence with IPFS/Arweave upload
     ...registerDeliveryEvidenceRoutes(),
+    // Restock waitlist subscriptions
+    ...registerWaitlistRoutes(),
+    // Bulk CSV catalog import jobs
+    ...registerBulkCatalogImportRoutes(),
     // Agent Chat - SSE streaming for agent conversations
     ...registerAgentChatRoutes(),
   ];
