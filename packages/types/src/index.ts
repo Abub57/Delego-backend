@@ -3,6 +3,7 @@
  * All services and apps should import from this package.
  */
 
+export * from "./audit.js";
 export * from "./audit-chain.js";
 export * from "./assets.js";
 export * from "./user.js";
